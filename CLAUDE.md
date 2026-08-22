@@ -216,11 +216,11 @@ Este archivo es el mecanismo de memoria entre sesiones. Si está desactualizado,
 </session_protocol>
 
 <current_phase>
-**F0 · Fundación — sáb 22 ago**
+**F1 completa (22 ago) → F2 · Ingesta multimodal**
 
-ADR-003 resuelto (22 ago): Gemini 3.5 NO se sirve desde `northamerica-south1`. PII se queda en México; solo payloads redactados van a Vertex AI (`global`). Ver `docs/adr/003-data-residency.md`.
+ADR-003: Gemini NO se sirve desde `northamerica-south1`; PII se queda en México, solo payloads redactados van a Vertex AI (`global`). ADR-008: firma del ledger detrás de `Firmador` (HMAC local / KMS MAC).
 
-Bloqueo abierto: facturación del proyecto `garita-hackathon` (pendiente del humano, pasos en `docs/PROGRESS.md`). Sin ella no hay Cloud Run.
+Bloqueos abiertos: facturación de `garita-hackathon` (pendiente del humano) y librería para generar el corpus sintético (pregunta 4 en `docs/PROGRESS.md`).
 
-Siguiente acción: `scripts/deploy_hello.sh` en cuanto haya facturación; mientras tanto arrancar F1 (`src/dominio/`), que no necesita GCP.
+Siguiente acción: ver "Siguiente acción concreta" en `docs/PROGRESS.md`.
 </current_phase>
