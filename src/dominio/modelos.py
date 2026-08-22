@@ -39,6 +39,7 @@ class DocumentoVigencia(_Modelo):
     confianza_extraccion: float = Field(ge=0.0, le=1.0)
     requiere_revision_humana: bool
     hash_documento: str
+    emisor: str | None = None  # aseguradora, verificentro, SICT… (AseguraRespCivil en la Carta Porte)
 
     @model_validator(mode="after")
     def _sabe_lo_que_no_sabe(self) -> "DocumentoVigencia":
@@ -72,12 +73,27 @@ class Activo(_Modelo):
     tarjeta_circulacion: DocumentoVigencia
     verificacion_fisico_mecanica: DocumentoVigencia
     poliza_responsabilidad_civil: DocumentoVigencia
+    peso_bruto_vehicular: float | None = None  # toneladas, PesoBrutoVehicular (tractor)
+    anio_modelo: int | None = None  # AnioModeloVM (tractor)
+    sub_tipo_rem: str | None = None  # c_SubTipoRem (caja/dolly)
 
     @model_validator(mode="after")
-    def _config_solo_tractor(self) -> "Activo":
+    def _campos_por_tipo(self) -> "Activo":
         if self.tipo != "tractor" and self.config_autotransporte is not None:
             raise ValueError("config_autotransporte solo aplica a tractor")
+        if self.tipo == "tractor" and self.sub_tipo_rem is not None:
+            raise ValueError("sub_tipo_rem solo aplica a caja o dolly")
         return self
+
+
+class Transportista(_Modelo):
+    """El permisionario (tenant). Dueño del permiso SICT y del RFC que emite la Carta Porte."""
+
+    tenant_id: str
+    rfc: str  # sintético: prefijo XAXX
+    razon_social: str
+    tipo_permiso_sict: str  # c_TipoPermiso, p. ej. TPAF01
+    permiso_sict: DocumentoVigencia  # folio = NumPermisoSCT
 
 
 class Mercancia(_Modelo):
@@ -130,6 +146,25 @@ class AccionPropuesta(_Modelo):
         return self
 
 
+class Ubicacion(_Modelo):
+    """Nodo Ubicacion de la Carta Porte. Nombres del SAT."""
+
+    tipo_ubicacion: Literal["Origen", "Destino"]
+    id_ubicacion: str  # OR000001 / DE000001
+    rfc_remitente_destinatario: str
+    fecha_hora_salida_llegada: datetime  # sin zona: hora local, como exige t_FechaH
+    distancia_recorrida: float | None = None  # km, solo Destino
+
+    @model_validator(mode="after")
+    def _id_segun_tipo(self) -> "Ubicacion":
+        prefijo = "OR" if self.tipo_ubicacion == "Origen" else "DE"
+        if not (self.id_ubicacion.startswith(prefijo) and len(self.id_ubicacion) == 8 and self.id_ubicacion[2:].isdigit()):
+            raise ValueError(f"id_ubicacion debe ser {prefijo} + 6 dígitos")
+        if self.tipo_ubicacion == "Destino" and self.distancia_recorrida is None:
+            raise ValueError("Destino exige distancia_recorrida")
+        return self
+
+
 class Viaje(_Modelo):
     viaje_id: str
     tenant_id: str
@@ -143,6 +178,7 @@ class Viaje(_Modelo):
     via_entrada_salida: str | None
     regimenes_aduaneros: list[str] = Field(default_factory=list, max_length=10)
     mercancias: list[Mercancia] = Field(default_factory=list)
+    ubicaciones: list[Ubicacion] = Field(default_factory=list)
     bloqueos: list[Bloqueo] = Field(default_factory=list)
 
     @model_validator(mode="after")

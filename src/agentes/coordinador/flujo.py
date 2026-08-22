@@ -14,11 +14,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from typing import Any
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from dominio.enums import EstadoAccion, EstadoViaje, MotivoBloqueo
 from dominio.estados import transitar
-from dominio.modelos import AccionPropuesta, Activo, Bloqueo, HandoffResult, Operador, Viaje
+from dominio.modelos import AccionPropuesta, Activo, Bloqueo, HandoffResult, Operador, Transportista, Viaje
 from infra.handoff import ejecutar_handoff
 from infra.idempotencia import clave_idempotencia
 from tools.registry import ToolRegistry
@@ -34,6 +34,18 @@ class Servicios:
     registro: ToolRegistry
     hoy: date
     publisher: Any = None
+    pac: Any = None  # infra.pac_mock.PacMock en todos los entornos del hackathon
+
+
+class CartaPorteTimbrada(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    viaje_id: str
+    tenant_id: str
+    id_ccp: str
+    uuid: str
+    hash_xml: str
+    xml: str
 
 
 def _expediente(viaje: Viaje, s: Servicios) -> tuple[Activo | None, list[Activo], Operador | None]:
@@ -142,3 +154,31 @@ def reanudar_tras_aprobacion(viaje_id: str, accion_id: str, s: Servicios) -> Via
         raise ValueError("se requiere un viaje bloqueado y una acción aprobada")
     transitar(viaje, EstadoViaje.validando, ledger=s.ledger, repo=s.repo, actor=AGENTE, accion=accion)
     return procesar_viaje(viaje_id, s)
+
+
+def despachar(viaje_id: str, s: Servicios) -> tuple[Viaje, Any]:
+    """listo → en_ruta: construye la Carta Porte, la pasa por el PAC (mock) y sale.
+    El XML y el timbre quedan en el expediente; el hash del XML, en el ledger."""
+    from infra.pac_mock import PacMock
+    from tools.carta_porte import id_ccp
+
+    construir_carta_porte = s.registro.resolver("validador", "construir_carta_porte")
+
+    viaje = s.repo.obtener("viajes", viaje_id, Viaje)
+    if viaje is None or viaje.estado != EstadoViaje.listo:
+        raise ValueError(f"{viaje_id} no está en listo")
+    tractor, cajas, operador = _expediente(viaje, s)
+    transportista = s.repo.obtener("transportistas", viaje.tenant_id, Transportista)
+    if transportista is None:
+        raise ValueError(f"no hay transportista para {viaje.tenant_id}")
+    xml = construir_carta_porte(viaje, tractor, cajas, operador, transportista)
+    timbre = (s.pac or PacMock()).timbrar(xml)
+    s.ledger.append(
+        tenant_id=viaje.tenant_id, viaje_id=viaje_id, tipo_evento="carta_porte_timbrada_mock", actor=AGENTE,
+        payload={"id_ccp": id_ccp(viaje_id), "uuid": timbre.uuid, "hash_xml": timbre.hash_xml, "pac": timbre.pac},
+        idempotency_key=clave_idempotencia(viaje_id, "timbrado", timbre.hash_xml),
+    )
+    s.repo.guardar("cartas_porte", viaje_id, CartaPorteTimbrada(
+        viaje_id=viaje_id, tenant_id=viaje.tenant_id, id_ccp=id_ccp(viaje_id), uuid=timbre.uuid,
+        hash_xml=timbre.hash_xml, xml=xml.decode("utf-8")))
+    return transitar(viaje, EstadoViaje.en_ruta, ledger=s.ledger, repo=s.repo, actor=AGENTE, carta_porte_xml=xml), timbre
