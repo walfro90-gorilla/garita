@@ -1,0 +1,48 @@
+{
+  "_nota": "Corpus SINTÉTICO. Ningún dato real. RFC XAXX/XEXX, CURP TEST…, placas y folios TEST-. `transcripcion` es lo que Gemma transcribiría del documento; en tests sustituye a Gemma.",
+  "tenant_id": "tenant-cafe57-sintetico",
+  "hoy": "2026-08-22",
+  "operadores_conocidos": ["OPERADOR SINTETICO UNO", "OPERADORA SINTETICA DOS"],
+  "documentos": [
+    {
+      "documento_id": "doc-lic-0001",
+      "archivo": "licencia_federal_borrosa.jpg",
+      "tipo": "licencia_federal",
+      "transcripcion": "SECRETARIA DE INFRAESTRUCTURA COMUNICACIONES Y TRANSPORTES\nLICENCIA FEDERAL DE CONDUCTOR\nNOMBRE: OPERADOR SINTETICO UNO\nCURP: TEST900101HCHRST01\nNo. LICENCIA: TEST-LIC-0001\nCATEGORIA: E\nFECHA DE EXPEDICION: 2024-03-15\nVIGENCIA: [ILEGIBLE]\nDOMICILIO: CALLE SINTETICA 123 CD JUAREZ CHIH",
+      "pii": ["OPERADOR SINTETICO UNO", "TEST900101HCHRST01", "CALLE SINTETICA 123 CD JUAREZ CHIH"],
+      "esperado": {"folio": "TEST-LIC-0001", "fecha_vencimiento": null, "estado": "ilegible", "requiere_revision_humana": true}
+    },
+    {
+      "documento_id": "doc-verif-0001",
+      "archivo": "verificacion_fisico_mecanica_vencida.jpg",
+      "tipo": "verificacion_fisico_mecanica",
+      "transcripcion": "CONSTANCIA DE VERIFICACION FISICO-MECANICA\nUNIDAD DE VERIFICACION SINTETICA UV-TEST-09\nPLACA: TEST001  TIPO: TRACTOCAMION  NUM. ECONOMICO: T-01\nPROPIETARIO: TRANSPORTES SINTETICOS SA DE CV  RFC: XAXX010101000\nFOLIO: TEST-VFM-0001\nFECHA DE VERIFICACION: 2025-07-01\nVIGENCIA HASTA: 2026-07-01\nRESULTADO: APROBADO",
+      "pii": ["XAXX010101000"],
+      "esperado": {"folio": "TEST-VFM-0001", "fecha_vencimiento": "2026-07-01", "estado": "vencido", "requiere_revision_humana": false}
+    },
+    {
+      "documento_id": "doc-perm-0001",
+      "archivo": "permiso_sict_escaneado.jpg",
+      "tipo": "permiso_sict",
+      "transcripcion": "SICT - DIRECCION GENERAL DE AUTOTRANSPORTE FEDERAL\nPERMISO PARA EL SERVICIO DE AUTOTRANSPORTE FEDERAL DE CARGA\nTIPO DE PERMISO: TPAF01\nPERMISIONARIO: TRANSPORTES SINTETICOS SA DE CV\nRFC: XAXX010101000\nNUMERO DE PERMISO: TEST-PERM-0001\nFECHA DE EXPEDICION: 2022-03-15\nVIGENCIA: 2027-03-15",
+      "pii": ["XAXX010101000"],
+      "esperado": {"folio": "TEST-PERM-0001", "fecha_vencimiento": "2027-03-15", "estado": "vigente", "requiere_revision_humana": false}
+    },
+    {
+      "documento_id": "doc-pol-0001",
+      "archivo": "poliza_responsabilidad_civil.pdf",
+      "tipo": "poliza_responsabilidad_civil",
+      "transcripcion": "ASEGURADORA SINTETICA SA\nPOLIZA DE RESPONSABILIDAD CIVIL AUTOTRANSPORTE FEDERAL\nNUMERO DE POLIZA: TEST-POL-0001\nCONTRATANTE: TRANSPORTES SINTETICOS SA DE CV  RFC: XAXX010101000\nVEHICULO: TRACTOCAMION PLACA TEST001\nVIGENCIA DESDE: 2025-09-10 12:00 HRS\nVIGENCIA HASTA: 2026-09-10 12:00 HRS\nSUMA ASEGURADA: 5,000,000.00 MXN",
+      "pii": ["XAXX010101000"],
+      "esperado": {"folio": "TEST-POL-0001", "fecha_vencimiento": "2026-09-10", "estado": "por_vencer", "requiere_revision_humana": false}
+    },
+    {
+      "documento_id": "doc-insp-0001",
+      "archivo": "inspeccion_17_puntos_manuscrita.jpg",
+      "tipo": "inspeccion_17_puntos",
+      "transcripcion": "INSPECCION DE 17 PUNTOS CTPAT\nUNIDAD: TEST001 / CAJA TEST002\nOPERADOR: OPERADORA SINTETICA DOS\nFECHA: 2026-08-21\nSELLO ISO 17712: TEST-SELLO-77\n1 DEFENSA OK 2 MOTOR OK 3 LLANTAS OK 4 PISO REMOLQUE OK 5 TANQUES OK 6 CABINA OK 7 TANQUES AIRE OK 8 EJES OK 9 QUINTA RUEDA OK 10 EXTERIOR OK 11 PUERTAS OK 12 PARED FRONTAL OK 13 PARED IZQ OK 14 PARED DER OK 15 TECHO OK 16 INTERIOR OK 17 REFRIGERACION NA\nFIRMA: ________",
+      "pii": ["OPERADORA SINTETICA DOS"],
+      "esperado": {"folio": "TEST-SELLO-77", "fecha_vencimiento": "2026-08-22", "estado": "por_vencer", "requiere_revision_humana": false}
+    }
+  ]
+}
