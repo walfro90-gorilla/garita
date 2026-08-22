@@ -7,7 +7,7 @@
 
 ## Estado actual
 
-**Fase:** F0 · Fundación — código listo, deploy bloqueado por facturación
+**Fase:** F1 · Núcleo determinista — **completa** (suite 52 verde). F0 sigue con 3 criterios bloqueados por facturación.
 **Fecha:** 22 ago 2026
 **Días restantes hasta el envío (dom 30 ago):** 8
 
@@ -33,6 +33,16 @@
 - [ ] Captura de consola mostrando la región — tras el deploy.
 - [x] Diagrama de arquitectura v0 — `docs/architecture-v0.md` (Mermaid, con la frontera de redacción).
 
+### F1 — completa (22 ago, adelantada un día)
+- [x] Modelos Pydantic en `src/dominio/modelos.py`: `DocumentoVigencia`, `Operador`, `Activo`, `Mercancia`, `Bloqueo`, `AccionPropuesta`, `Viaje`, `HallazgoCTPAT`, `HandoffResult`, `EntradaLedger`. `extra="forbid"`. Validadores: confianza < 0.85 o fecha ausente ⇒ `requiere_revision_humana=True`; internacional ⇒ país ≠ MEX; acción aprobada ⇒ humano.
+- [x] Máquina de estados `src/dominio/estados.py` con las 4 guardas + cancelado; ledger antes de persistir (test con repo roto).
+- [x] Repositorio: `Repository` protocolo + `InMemoryRepository` (probado) + `FirestoreRepository` (adaptador, sin probar hasta facturación).
+- [x] Catálogos: 5 snapshots fechados en `catalogos/` con SHA-256 en `catalogos/README.md`. `catalogo_lookup` solo acepta los 3 del recorte; el resto lanza `CatalogoNoDisponible`.
+- [x] `xsd_validate`: CartaPorte31.xsd compilado sin red (imports reescritos a snapshots locales, 0.5 s). Fixture sintético `fixtures/carta_porte_31_sintetica.xml` válido contra el XSD oficial.
+- [x] `ToolRegistry` con scopes de `<agent_contracts>`; **test de aislamiento** (`tests/test_registry.py`, 17 casos parametrizados): `coordinador`→`storage_read` lanza `ToolFueraDeScope`.
+- [x] `LedgerService` (`src/infra/ledger.py`): hash-chain SHA-256 + firma detrás de `Firmador` (ADR-008). `verify()` detecta payload alterado, hash recalculado sin llave, entrada eliminada.
+- [x] **AC:** suite verde (52) · viaje recorre borrador→…→cerrado vía código (`tests/test_estados.py`) · aislamiento falla correctamente · `ledger.verify()` detecta alteración.
+
 ---
 
 ## Decisiones tomadas
@@ -46,6 +56,7 @@
 | 005 | Compuerta humana en todo efecto externo | Aceptado |
 | 006 | Inmutabilidad por hash-chain + KMS, sin blockchain | Aceptado |
 | 007 | Tenant-shaped desde el primer commit | Aceptado |
+| 008 | Firma del ledger detrás de `Firmador`: HMAC local en tests, Cloud KMS MAC en producción | **Aceptado — 22 ago** |
 
 Hallazgos colaterales de ADR-003 que afectan fases posteriores:
 - No existe Gemini 3.5 **Pro**. Modelos 3.x GA en Vertex: `gemini-3.5-flash` (05/2026), `gemini-3.5-flash-lite` y `gemini-3.6-flash` (07/2026), `gemini-3.7-flash` (13 ago 2026). Solo 3.5 Flash tiene endpoints regionales; el resto solo `global`/`us`/`eu`. El "Pro solo para razonamiento final" del SPEC §riesgos no aplica: usar 3.7 Flash si se quiere más razonamiento.
@@ -95,13 +106,19 @@ Hallazgos colaterales de ADR-003 que afectan fases posteriores:
 1. ~~ADR-003~~ — resuelto.
 2. **Categoría CTPAT de Café 57.** ¿Cruza físicamente el puente (Highway Carrier: requiere SCAC + DOT) o entrega en patio para transfer (Long Haul mexicano: requiere número SCT)? Cambia campos del modelo `Tenant`.
 3. **Escala de la flota.** Número aproximado de unidades y operadores — para la narrativa del video, no para la arquitectura.
-4. **Modelo por defecto.** ADR-003 fija `gemini-3.5-flash` (GA más antigua, endpoints regionales). Si prefieres `gemini-3.7-flash` (GA 13 ago, solo global/us/eu), es cambiar `GARITA_MODELO`. Decidir antes de grabar el video para que el guion diga el nombre correcto.
+4. **Dependencia nueva para F2 (corpus sintético).** Generar licencias "fotografiadas", PDFs de 12 páginas y hojas manuscritas requiere una librería de imagen/PDF (`Pillow` + `reportlab`, o similar). No está en `<stack>`. ¿Autorizas agregarlas solo como dependencia de desarrollo (`requirements-dev.txt`)? Alternativa sin dependencia: crear los 5 documentos a mano (Canva/Docs) y subirlos a `fixtures/`.
+5. **Modelo por defecto.** ADR-003 fija `gemini-3.5-flash` (GA más antigua, endpoints regionales). Si prefieres `gemini-3.7-flash` (GA 13 ago, solo global/us/eu), es cambiar `GARITA_MODELO`. Decidir antes de grabar el video para que el guion diga el nombre correcto.
 
 ---
 
 ## Siguiente acción concreta
 
-**Si la facturación ya está activa:** ejecutar en este orden y pegar el resultado aquí:
+**F2 · Ingesta multimodal (D3).** Sin GCP solo se puede avanzar el corpus sintético; Gemma en Cloud Run y el agente `ingesta` con Gemini necesitan facturación. Orden:
+1. Resolver la pregunta 4 (librería para el corpus). Con respuesta, generar los 5 documentos de SPEC §5.1 en `fixtures/corpus/` con datos `XAXX`/`TEST-`, incluida la verificación **vencida** y la licencia con fecha **borrosa**.
+2. Definir el contrato del redactor: `gemma_redact(texto) -> (texto_redactado, mapa_tokens)` en `src/tools/gemma_redact.py`, con un redactor determinista por patrón (CURP, RFC, placa) como fallback local y probado — ADR-003 §4.
+3. Esquema de salida de `gemini_extract` = `DocumentoVigencia` (ya existe); el handoff se valida con Pydantic (`HandoffResult`).
+
+**F0 pendiente — si la facturación ya está activa:** ejecutar en este orden y pegar el resultado aquí:
 ```bash
 gcloud billing projects describe garita-hackathon --format='value(billingEnabled)'
 scripts/budget_alerts.sh <BILLING_ACCOUNT_ID>
@@ -118,6 +135,12 @@ Luego marcar los tres criterios de F0 restantes, commitear la captura como `F0: 
 ### 22 ago — sesión 1
 - Repo inicializado. Estructura de archivos creada.
 - `CLAUDE.md`, `docs/SPEC.md` y `docs/PROGRESS.md` en su lugar.
+
+### 22 ago — sesión 3 (F1)
+- Catálogos SAT descargados (5 XSD, 9.2 MB) con fecha y SHA-256. `c_FraccionArancelaria` vive en `catComExt.xsd`, no en `catCartaPorte.xsd`.
+- Dominio, máquina de estados, ledger (ADR-008), repositorio, tools deterministas, registro de scopes.
+- 52 tests verdes en 1.9 s. Fixture Carta Porte 3.1 sintético válido contra XSD oficial al primer intento.
+- Hallazgo: `99999999` es una fracción arancelaria válida en el catálogo (genérica); no usarla como "inválida" en tests.
 
 ### 22 ago — sesión 2
 - gcloud 580.0.0 verificado, autenticado como `wallyagui87@gmail.com`.
