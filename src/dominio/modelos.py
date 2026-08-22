@@ -181,7 +181,7 @@ class HandoffResult(_Modelo):
     agente: str
     paso_id: str
     estado: EstadoHandoff
-    intentos: int = Field(ge=1)
+    intentos: int = Field(ge=0)  # 0 = no llegó a llamar al modelo (p. ej. fuga de PII detenida)
     payload: dict[str, Any] | None = None
     error_validacion: str | None = None
 
