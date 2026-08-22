@@ -216,11 +216,11 @@ Este archivo es el mecanismo de memoria entre sesiones. Si está desactualizado,
 </session_protocol>
 
 <current_phase>
-**F1 completa (22 ago) → F2 · Ingesta multimodal**
+**F2 parte local completa (22 ago) → F3 · Flota multi-agente**
 
-ADR-003: Gemini NO se sirve desde `northamerica-south1`; PII se queda en México, solo payloads redactados van a Vertex AI (`global`). ADR-008: firma del ledger detrás de `Firmador` (HMAC local / KMS MAC).
+ADR-003: Gemini NO se sirve desde `northamerica-south1`. ADR-008: firma del ledger detrás de `Firmador`. ADR-009: Gemini solo recibe texto redactado; Gemma transcribe y redacta en MX; `infra.frontera.afirmar_sin_pii` es la compuerta.
 
-Bloqueos abiertos: facturación de `garita-hackathon` (pendiente del humano) y librería para generar el corpus sintético (pregunta 4 en `docs/PROGRESS.md`).
+Bloqueo abierto: facturación de `garita-hackathon` (pendiente del humano). Sin ella: ni Cloud Run, ni Gemma en MX, ni Gemini real. Todo lo demás corre local (suite 64).
 
-Siguiente acción: ver "Siguiente acción concreta" en `docs/PROGRESS.md`.
+Siguiente acción: ver "Siguiente acción concreta" en `docs/PROGRESS.md` (F3 sin GCP: validador/cross_check, cumplimiento, seguimiento, coordinador, idempotencia).
 </current_phase>

@@ -18,7 +18,12 @@ from pydantic import BaseModel, ConfigDict
 
 from infra.frontera import PATRONES_PII
 
-ETIQUETA_DOMICILIO = re.compile(r"(?im)^((?:DOMICILIO|DIRECCI[OÓ]N)\s*:\s*)(.+?)\s*$")
+# Etiquetas de PII en documentos oficiales. La OCR puede deformar el VALOR (una CURP sin una
+# letra ya no cumple la regex), pero la ETIQUETA sobrevive: se redacta lo que sigue a la etiqueta.
+# Gemma a veces deja "[CURP]: valor" — el corchete opcional lo cubre.
+ETIQUETA_VALOR_CORTO = re.compile(r"\[?\b(CURP|RFC)\]?\s*:\s*(?!\[)(\S+)")
+ETIQUETA_LINEA = re.compile(r"(?im)^\[?(NOMBRE|DOMICILIO|DIRECCI[OÓ]N)\]?\s*:\s*(?!\[)(.+?)\s*$")
+NORMALIZA = {"DIRECCION": "DOMICILIO", "DIRECCIÓN": "DOMICILIO"}
 
 
 class Redaccion(BaseModel):
@@ -91,8 +96,12 @@ class RedactorPatron:
 
         for tipo, patron in PATRONES_PII.items():
             texto = patron.sub(lambda m: token(tipo, m.group(0)), texto)
-        # Domicilio: no tiene formato fijo, pero en documentos oficiales siempre va etiquetado.
-        texto = ETIQUETA_DOMICILIO.sub(lambda m: m.group(1) + token("DOMICILIO", m.group(2).strip()), texto)
+        def por_etiqueta(m: re.Match[str]) -> str:
+            tipo = NORMALIZA.get(m.group(1).upper(), m.group(1).upper())
+            return f"{tipo}: {token(tipo, m.group(2).strip())}"
+
+        texto = ETIQUETA_VALOR_CORTO.sub(por_etiqueta, texto)
+        texto = ETIQUETA_LINEA.sub(por_etiqueta, texto)
         for nombre in sorted(nombres_conocidos, key=len, reverse=True):
             if nombre:
                 texto = re.sub(re.escape(nombre), lambda m: token("NOMBRE", m.group(0)), texto, flags=re.IGNORECASE)

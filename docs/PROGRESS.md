@@ -7,7 +7,7 @@
 
 ## Estado actual
 
-**Fase:** F1 · Núcleo determinista — **completa** (suite 52 verde). F0 sigue con 3 criterios bloqueados por facturación.
+**Fase:** F2 · Ingesta multimodal — parte local completa (suite 64 verde); Gemma en Cloud Run y Gemini real esperan facturación. F0 sigue con 3 criterios bloqueados por facturación.
 **Fecha:** 22 ago 2026
 **Días restantes hasta el envío (dom 30 ago):** 8
 
@@ -43,6 +43,18 @@
 - [x] `LedgerService` (`src/infra/ledger.py`): hash-chain SHA-256 + firma detrás de `Firmador` (ADR-008). `verify()` detecta payload alterado, hash recalculado sin llave, entrada eliminada.
 - [x] **AC:** suite verde (52) · viaje recorre borrador→…→cerrado vía código (`tests/test_estados.py`) · aislamiento falla correctamente · `ledger.verify()` detecta alteración.
 
+### F2 — en curso (22 ago, adelantada)
+- [x] Corpus sintético: 5 documentos (recorte §5.1) en `fixtures/corpus/` + `manifiesto.json` con transcripción, PII y valores esperados. Generador `scripts/generar_corpus.py` (Pillow/reportlab en `requirements-dev.txt`).
+- [x] **ADR-009:** Gemini solo recibe texto redactado; Gemma (multimodal, CPU, MX) transcribe y redacta; `RedactorPatron` segunda capa; `infra.frontera.afirmar_sin_pii` compuerta antes de Vertex.
+- [x] Tools de `ingesta`: `storage_read`, `gemma_redact` (Ollama API, mismo contrato local/Cloud Run), `gemini_extract` (google-genai, `response_schema=ExtraccionDocumento`), `firestore_write`.
+- [x] `agentes/ingesta/pipeline.ingerir()`: handoff validado con Pydantic, reintento ×3 con el error inyectado, dead-letter al ledger, mapa de tokens a `mapas_redaccion` (MX).
+- [x] **AC local:** 5/5 documentos → `DocumentoVigencia` válido · verificación vencida marcada `vencido` · licencia con fecha ilegible → `fecha_vencimiento=None`, `ilegible`, `requiere_revision_humana=True` · traza `frontera.ok` y aserción de que ningún valor PII ni patrón CURP/RFC llegó al extractor.
+- [x] **Gemma real probada** (`gemma3:4b`, Ollama local, 100 % CPU, 8 cores con solo 5 GB libres): transcribe bien la licencia borrosa, **omite la línea VIGENCIA en vez de inventarla** (bien), pero (a) deforma la CURP (`TEST900101HCRST01`, falta una letra → la regex ya no la atrapa) y (b) **no redacta**: deja nombre, CURP y domicilio en claro, a lo sumo etiqueta `[CURP]: valor`. Consecuencia aplicada: redacción y compuerta **por etiqueta** (lo que sigue a `CURP:`/`RFC:`/`NOMBRE:`/`DOMICILIO:` se tokeniza sin importar el formato; la frontera rechaza cualquier etiqueta sin token). Test con el hallazgo literal en `tests/test_redaccion.py`.
+- [x] **Latencia medida:** visión en CPU = **231 s** de prompt-eval para una imagen (359 tokens) + 12 s de generación; segunda llamada con la misma imagen 0.3 s (caché). Medición bajo presión de memoria; **re-medir en Cloud Run 8 vCPU / 16 GiB** antes de decidir. Si sigue en minutos: el bloque en vivo del video muestra la ingesta ya corrida (logs + Firestore) y la grabación continua empieza en `cumplimiento`; o plan B de ADR-009 con ADR nuevo.
+- [ ] Servicio Gemma en Cloud Run `northamerica-south1` — requiere facturación (contenedor Ollama + `gemma3:4b`, CPU).
+- [ ] `gemini_extract` contra Vertex AI real — requiere facturación. Código listo, sin probar.
+- [ ] Extracción de texto de PDF (póliza de 12 páginas) para Gemma — F3; hoy el PDF se cubre con la transcripción del manifiesto.
+
 ---
 
 ## Decisiones tomadas
@@ -57,6 +69,7 @@
 | 006 | Inmutabilidad por hash-chain + KMS, sin blockchain | Aceptado |
 | 007 | Tenant-shaped desde el primer commit | Aceptado |
 | 008 | Firma del ledger detrás de `Firmador`: HMAC local en tests, Cloud KMS MAC en producción | **Aceptado — 22 ago** |
+| 009 | Gemini solo recibe texto redactado; Gemma transcribe y redacta en México; compuerta `afirmar_sin_pii` | **Aceptado — 22 ago** |
 
 Hallazgos colaterales de ADR-003 que afectan fases posteriores:
 - No existe Gemini 3.5 **Pro**. Modelos 3.x GA en Vertex: `gemini-3.5-flash` (05/2026), `gemini-3.5-flash-lite` y `gemini-3.6-flash` (07/2026), `gemini-3.7-flash` (13 ago 2026). Solo 3.5 Flash tiene endpoints regionales; el resto solo `global`/`us`/`eu`. El "Pro solo para razonamiento final" del SPEC §riesgos no aplica: usar 3.7 Flash si se quiere más razonamiento.
@@ -106,17 +119,22 @@ Hallazgos colaterales de ADR-003 que afectan fases posteriores:
 1. ~~ADR-003~~ — resuelto.
 2. **Categoría CTPAT de Café 57.** ¿Cruza físicamente el puente (Highway Carrier: requiere SCAC + DOT) o entrega en patio para transfer (Long Haul mexicano: requiere número SCT)? Cambia campos del modelo `Tenant`.
 3. **Escala de la flota.** Número aproximado de unidades y operadores — para la narrativa del video, no para la arquitectura.
-4. **Dependencia nueva para F2 (corpus sintético).** Generar licencias "fotografiadas", PDFs de 12 páginas y hojas manuscritas requiere una librería de imagen/PDF (`Pillow` + `reportlab`, o similar). No está en `<stack>`. ¿Autorizas agregarlas solo como dependencia de desarrollo (`requirements-dev.txt`)? Alternativa sin dependencia: crear los 5 documentos a mano (Canva/Docs) y subirlos a `fixtures/`.
+4. ~~Dependencia para el corpus~~ — autorizada (Pillow + reportlab como dev-deps).
 5. **Modelo por defecto.** ADR-003 fija `gemini-3.5-flash` (GA más antigua, endpoints regionales). Si prefieres `gemini-3.7-flash` (GA 13 ago, solo global/us/eu), es cambiar `GARITA_MODELO`. Decidir antes de grabar el video para que el guion diga el nombre correcto.
 
 ---
 
 ## Siguiente acción concreta
 
-**F2 · Ingesta multimodal (D3).** Sin GCP solo se puede avanzar el corpus sintético; Gemma en Cloud Run y el agente `ingesta` con Gemini necesitan facturación. Orden:
-1. Resolver la pregunta 4 (librería para el corpus). Con respuesta, generar los 5 documentos de SPEC §5.1 en `fixtures/corpus/` con datos `XAXX`/`TEST-`, incluida la verificación **vencida** y la licencia con fecha **borrosa**.
-2. Definir el contrato del redactor: `gemma_redact(texto) -> (texto_redactado, mapa_tokens)` en `src/tools/gemma_redact.py`, con un redactor determinista por patrón (CURP, RFC, placa) como fallback local y probado — ADR-003 §4.
-3. Esquema de salida de `gemini_extract` = `DocumentoVigencia` (ya existe); el handoff se valida con Pydantic (`HandoffResult`).
+**F3 · Flota multi-agente (D4–D5).** Lo que no necesita GCP, en este orden:
+1. Envoltorio ADK de `ingesta` (`LlmAgent` con las 4 tools del scope vía `ToolRegistry`) y de `validador` (`xsd_validate`, `catalogo_lookup`, `cross_check` — esta última: cruzar `Viaje` vs `Activo`/`Operador`/`DocumentoVigencia` y producir `Bloqueo`s; es determinista, tests primero).
+2. `cumplimiento`: `vigencias_query` sobre el repositorio (por activo y operador) → lista de `Bloqueo` con severidad (vencido = duro, por_vencer = blando). Determinista.
+3. `seguimiento`: `proponer_accion` → `AccionPropuesta` en `pending_approval`; cola de aprobación = colección `acciones` filtrada por estado.
+4. `coordinador`: orquesta secuencial ingesta → (validador ‖ cumplimiento) → seguimiento, y aplica `transitar()`. **El bloqueo** del viaje con motivo, evidencia y acción propuesta es el producto.
+5. Idempotencia: `idempotency_key = sha256(viaje_id + paso_id + hash(input))` en `firestore_write` y `proponer_accion`; test de que reejecutar no duplica.
+6. Pub/Sub + dead-letter real: requiere facturación; dejar el handler escrito contra una interfaz `Publisher` con implementación en memoria.
+
+**Con facturación (en cuanto exista):** `scripts/deploy_hello.sh`; luego Gemma en Cloud Run MX (`ollama/ollama` + `gemma3:4b`, CPU 8 vCPU / 16 GiB, `min-instances=0`) y `scripts/probar_gemma_local.py <url.run.app>` contra ese servicio; luego `gemini_extract` real con un documento del corpus.
 
 **F0 pendiente — si la facturación ya está activa:** ejecutar en este orden y pegar el resultado aquí:
 ```bash
@@ -135,6 +153,12 @@ Luego marcar los tres criterios de F0 restantes, commitear la captura como `F0: 
 ### 22 ago — sesión 1
 - Repo inicializado. Estructura de archivos creada.
 - `CLAUDE.md`, `docs/SPEC.md` y `docs/PROGRESS.md` en su lugar.
+
+### 22 ago — sesión 4 (F2)
+- Corpus sintético generado y verificado visualmente (licencia: vigencia emborronada, foto inclinada).
+- ADR-009 decide que Gemini nunca ve imágenes: Gemma transcribe y redacta en MX.
+- Pipeline `ingerir()` + 12 tests nuevos (64 total, 1.9 s). Prueba de caos del handoff (JSON inválido ×2 → ok en 3; ×∞ → dead-letter) y de fuga de PII.
+- `gemma3:4b` local (Ollama, CPU): transcripción correcta, no inventa la vigencia borrosa, pero no redacta y deforma la CURP. Se añadió redacción/compuerta por etiqueta. 231 s por imagen en CPU con 5 GB libres.
 
 ### 22 ago — sesión 3 (F1)
 - Catálogos SAT descargados (5 XSD, 9.2 MB) con fecha y SHA-256. `c_FraccionArancelaria` vive en `catComExt.xsd`, no en `catCartaPorte.xsd`.
