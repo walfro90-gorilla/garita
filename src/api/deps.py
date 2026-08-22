@@ -8,6 +8,7 @@ import secrets
 from datetime import date
 
 from agentes.coordinador.flujo import Servicios
+from dominio.modelos import Viaje
 from dominio.sintetico import sembrar_expediente
 from infra.ledger import FirmadorKms, FirmadorLocalHmac, LedgerService
 from infra.pac_mock import PacMock
@@ -19,6 +20,9 @@ from tools.registry import registro_por_defecto
 def construir_servicios(*, hoy: date | None = None) -> Servicios:
     backend = os.environ.get("GARITA_BACKEND", "memoria")
     if backend == "firestore":
+        faltan = [v for v in ("GOOGLE_CLOUD_PROJECT", "GARITA_KMS_KEY_VERSION") if not os.environ.get(v)]
+        if faltan:
+            raise RuntimeError(f"GARITA_BACKEND=firestore exige las variables {faltan} (ver scripts/deploy_hello.sh y PROGRESS.md)")
         repo = FirestoreRepository(project=os.environ["GOOGLE_CLOUD_PROJECT"], database=os.environ.get("GARITA_FIRESTORE_DB", "(default)"))
         firmador = FirmadorKms(os.environ["GARITA_KMS_KEY_VERSION"])
     else:
@@ -28,7 +32,7 @@ def construir_servicios(*, hoy: date | None = None) -> Servicios:
     publisher = InMemoryPublisher()  # Pub/Sub real: cuando haya facturación (PROGRESS.md)
     tenant = os.environ.get("GARITA_TENANT", "tenant-cafe57-sintetico")
     publisher.suscribir("garita-dead-letter", handler_dead_letter(repo, ledger, tenant))
-    if os.environ.get("GARITA_SEED_DEMO") == "1":
-        sembrar_expediente(repo)
-    return Servicios(repo=repo, ledger=ledger, registro=registro_por_defecto(repo), hoy=hoy or date.today(),
+    if os.environ.get("GARITA_SEED_DEMO") == "1" and repo.obtener("viajes", "viaje-1", Viaje) is None:
+        sembrar_expediente(repo)  # solo si el expediente no existe: no pisa estado persistido
+    return Servicios(repo=repo, ledger=ledger, registro=registro_por_defecto(repo), hoy=hoy,
                      publisher=publisher, pac=PacMock())

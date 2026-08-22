@@ -7,6 +7,8 @@
 Toda transición se escribe al ledger ANTES de persistirse.
 """
 
+import hashlib
+from collections.abc import Callable
 from typing import Any
 
 from dominio.enums import EstadoAccion, EstadoViaje
@@ -38,8 +40,10 @@ def transitar(
     actor: str,
     accion: AccionPropuesta | None = None,
     carta_porte_xml: bytes | None = None,
+    xsd_validate: Callable[[bytes], list[str]] | None = None,
 ) -> Viaje:
-    """Devuelve el viaje en su nuevo estado. No muta el recibido."""
+    """Devuelve el viaje en su nuevo estado. No muta el recibido.
+    `xsd_validate` lo aporta quien llama (tool del validador): el dominio no ejecuta tools."""
     origen = viaje.estado
     if destino not in TRANSICIONES[origen]:
         raise TransicionInvalida(f"{origen} → {destino} no está permitida")
@@ -64,21 +68,25 @@ def transitar(
         bloqueo.resuelto_por_accion_id = accion.accion_id
 
     if origen == E.listo and destino == E.en_ruta:
-        from tools.xsd_validate import xsd_validate  # import tardío: el esquema pesa
-
-        if carta_porte_xml is None:
-            raise TransicionInvalida("listo → en_ruta exige el payload de Carta Porte")
+        if carta_porte_xml is None or xsd_validate is None:
+            raise TransicionInvalida("listo → en_ruta exige el payload de Carta Porte y su validador XSD")
         errores = xsd_validate(carta_porte_xml)
         if errores:
             raise TransicionInvalida(f"Carta Porte inválida contra XSD: {errores[:3]}")
 
     nuevo.estado = destino
+    # Clave = contenido persistido del viaje + transición: un reintento tras una caída parcial no duplica;
+    # un ciclo legítimo (aprobación, evidencia nueva) cambia el contenido y sí se registra.
+    version = hashlib.sha256(viaje.model_dump_json().encode()).hexdigest()
     ledger.append(
         tenant_id=nuevo.tenant_id,
         viaje_id=nuevo.viaje_id,
         tipo_evento="transicion_viaje",
         actor=actor,
         payload={"de": origen, "a": destino, "accion_id": accion.accion_id if accion else None},
+        idempotency_key=hashlib.sha256(
+            f"{nuevo.viaje_id}|transicion|{origen}->{destino}|{accion.accion_id if accion else ''}|{version}".encode()
+        ).hexdigest(),
     )
     repo.guardar("viajes", nuevo.viaje_id, nuevo)
     return nuevo

@@ -7,7 +7,7 @@
 
 ## Estado actual
 
-**Fase:** F3 · Flota multi-agente — parte local completa (suite 76 verde). Gemini/Gemma/Pub/Sub reales esperan facturación. F0 sigue con 3 criterios bloqueados por facturación.
+**Fase:** F3 completa en local + Carta Porte + API (F5 adelantada) + revisión adversarial aplicada. Suite 91 verde. Gemini/Gemma/Pub/Sub/Cloud Run esperan facturación. F0 sigue con 3 criterios bloqueados por facturación.
 **Fecha:** 22 ago 2026
 **Días restantes hasta el envío (dom 30 ago):** 8
 
@@ -64,7 +64,12 @@
 - [x] **AC:** caso E2E (`tests/test_flujo.py`): expediente con verificación vencida → viaje `bloqueado` con motivo, evidencia (`…vencida.jpg`) y `renovar_documento` en cola `pendiente_aprobacion` · caos: `vigencias_query` devuelve basura → 3 `handoff inválido` en logs → dead-letter en expediente → bloqueo `verificacion_fallida` + acción `notificar` · reejecutar no duplica (acciones ni decisión en ledger) · toda decisión en el ledger (`decision_coordinador` + transiciones), `verify()` OK · flota ADK produce lo mismo (`tests/test_flota_adk.py`).
 - [ ] `ingesta` y `coordinador` como `LlmAgent` (Gemini) — facturación.
 - [ ] Pub/Sub real con dead-letter topic en `northamerica-south1` — facturación.
-- [ ] Constructor del XML de Carta Porte 3.1 desde `Viaje` (necesario para `listo → en_ruta` en el demo) + mock de PAC con contrato.
+- [x] Constructor de Carta Porte 3.1 (`tools/carta_porte.py`, scope validador): desde `Viaje` + `Activo` + `Operador` + `Transportista`; lanza `CartaPorteIncompleta` con todos los faltantes; válido contra el XSD oficial (nacional e internacional). `IdCCP` determinista (UUID v5 con prefijo CCC).
+- [x] Mock de PAC (`infra/pac_mock.py`): valida XSD, UUID `TEST-…`, sello ficticio; contrato `Pac.timbrar(xml) -> Timbre`. Nunca timbra de verdad.
+- [x] `flujo.despachar`: `listo → en_ruta`, XML + timbre en `cartas_porte`, hash del XML en el ledger.
+- [x] **API** (`src/api/main.py`, monta el servidor ADK + rutas `/api`): `salud`, `GET viajes/{id}` (expediente + acciones + ledger), `POST viajes/{id}/procesar` (flota ADK; si está bloqueado y hay acción aprobada, reanuda), `POST viajes/{id}/despachar`, `GET acciones`, `POST acciones/{id}/aprobar|rechazar`, `PUT documentos/{id}` (alta manual hasta que ingesta tenga Gemini), `GET ledger/verify`. `api/deps.py`: memoria+HMAC local / Firestore+KMS por `GARITA_BACKEND`. `GARITA_SEED_DEMO=1` siembra `dominio/sintetico.py`.
+- [x] Demo por HTTP probado con uvicorn real (`curl`): procesar → bloqueado → cola → aprobar (sigue bloqueado) → PUT documento renovado → procesar → listo → despachar (con humano) → en_ruta con UUID `TEST-`.
+- [x] **Revisión adversarial** (workflow, 4 lentes, 48 hallazgos, 23 verificados; el resto se agotó la cuota de subagentes y los triagué a mano). Aplicado: ledger se rehidrata del repo y serializa `append` (Cloud Run escala a cero); claves de idempotencia por contenido persistido (reintento tras caída parcial no duplica, test); `flota.Coordinador` comparte la guarda de estado con el síncrono (no deja decisiones fantasma); excepción de tool ⇒ dead-letter; despacho exige humano (ADR-005); `xsd_validate` inyectado en la guarda (el dominio no importa tools); el expediente con PII lo carga el paso del validador, no el coordinador; rechazar ⇒ nueva propuesta; `PUT /documentos` valida tipo y revalida el objeto (antes 500 con operador); la API no monta el servidor de desarrollo de ADK; cola siempre por tenant; `hoy` dinámico; seed no pisa estado; error claro si faltan variables de Firestore/KMS; Carta Porte: `Domicilio` obligatorio, `NumRegIdTrib`/`ResidenciaFiscal` para RFC extranjero, `TipoMateria`, `RFCFigura`, auto-validación XSD antes de devolver, importación marcada como no implementada (pedimento). Descartado con razón en ADR-010 §11.
 - [ ] `ctpat_msc_lookup` y `memory_bank` — F4 (GEAP).
 
 ---
@@ -82,7 +87,7 @@
 | 007 | Tenant-shaped desde el primer commit | Aceptado |
 | 008 | Firma del ledger detrás de `Firmador`: HMAC local en tests, Cloud KMS MAC en producción | **Aceptado — 22 ago** |
 | 009 | Gemini solo recibe texto redactado; Gemma transcribe y redacta en México; compuerta `afirmar_sin_pii` | **Aceptado — 22 ago** |
-| 010 | Flota ADK determinista; dead-letter bloquea; la evidencia libera, la aprobación no; ids deterministas | **Aceptado — 22 ago** |
+| 010 | Flota ADK determinista; dead-letter bloquea; la evidencia libera, la aprobación no; ids deterministas; despacho por humano; idempotencia por contenido | **Aceptado — 22 ago (addendum)** |
 
 Hallazgos colaterales de ADR-003 que afectan fases posteriores:
 - No existe Gemini 3.5 **Pro**. Modelos 3.x GA en Vertex: `gemini-3.5-flash` (05/2026), `gemini-3.5-flash-lite` y `gemini-3.6-flash` (07/2026), `gemini-3.7-flash` (13 ago 2026). Solo 3.5 Flash tiene endpoints regionales; el resto solo `global`/`us`/`eu`. El "Pro solo para razonamiento final" del SPEC §riesgos no aplica: usar 3.7 Flash si se quiere más razonamiento.
@@ -140,9 +145,10 @@ Hallazgos colaterales de ADR-003 que afectan fases posteriores:
 ## Siguiente acción concreta
 
 **Sin facturación, en este orden:**
-1. **Constructor de Carta Porte 3.1** `src/tools/carta_porte.py`: `Viaje` + expediente → XML del complemento, validado con `xsd_validate` (el fixture `fixtures/carta_porte_31_sintetica.xml` es la forma objetivo). Luego `listo → en_ruta` en el E2E y un **mock de PAC** (`src/infra/pac_mock.py`: recibe XML, devuelve UUID `TEST-…`, nunca timbra de verdad; se declara en el video).
-2. **API FastAPI** `src/api/main.py` (F5 adelantada, corre local): `POST /viajes/{id}/procesar` (flota ADK), `GET /acciones?estado=pendiente_aprobacion`, `POST /acciones/{id}/aprobar`, `GET /viajes/{id}` (expediente + ledger). Montar el servidor ADK (`get_fast_api_app`) en la misma app.
-3. **F3.5 ensayo de video** con lo local: grabar 4 min feos corriendo `pytest -k caos` y el E2E desde la API; anotar lo que no se puede mostrar.
+1. **F3.5 ensayo de video** con lo local: `GARITA_SEED_DEMO=1 PYTHONPATH=src .venv/bin/uvicorn api.main:app --port 8000` y recorrer con curl/`/docs`: procesar → bloqueado (mostrar explicación + evidencia), cola, aprobar, `PUT /documentos` renovado, procesar → listo, despachar con humano → en_ruta, `/ledger/verify`; `pytest -k caos -s` para la prueba de caos. Anotar lo que no se puede mostrar → backlog de F4/F5.
+2. **Frontend** (`web/`, Next.js, dos vistas): cola de aprobación (`GET /api/acciones`, botones aprobar/rechazar) y expediente (`GET /api/viajes/{id}`: estado, bloqueos con explicación y evidencia, ledger). Mínimo, sin diseño.
+3. **Dockerfile propio** para `src/api` (Python 3.12, `PYTHONPATH=/app/src`, uvicorn) listo para `gcloud run deploy --source` en cuanto haya facturación; variables: `GARITA_BACKEND=firestore`, `GOOGLE_CLOUD_PROJECT`, `GARITA_KMS_KEY_VERSION`, `GOOGLE_CLOUD_LOCATION=global`.
+4. Importación (`EntradaSalidaMerc=Entrada`): `DocumentacionAduanera` con pedimento — solo si el guion lo necesita; hoy `CartaPorteIncompleta` explícita.
 
 **Con facturación:** `scripts/deploy_hello.sh` → Gemma en Cloud Run MX → `ingesta` y `coordinador` como `LlmAgent` con `max_turns` → Pub/Sub + dead-letter topic → F4 (Memory Bank, Model Armor).
 
@@ -163,6 +169,15 @@ Luego marcar los tres criterios de F0 restantes, commitear la captura como `F0: 
 ### 22 ago — sesión 1
 - Repo inicializado. Estructura de archivos creada.
 - `CLAUDE.md`, `docs/SPEC.md` y `docs/PROGRESS.md` en su lugar.
+
+### 22 ago — sesión 7 (revisión adversarial aplicada)
+- 48 hallazgos → 30 cambios aplicados, 8 descartados con razón (ADR-010 §11). 91 tests en 2.8 s. API verificada de nuevo con uvicorn.
+- Los subagentes agotaron la cuota de sesión a mitad de la verificación (reset 8 am Chihuahua): 25 hallazgos verificados a mano.
+
+### 22 ago — sesión 6 (Carta Porte + API)
+- Modelos ampliados para la Carta Porte: `Transportista`, `Ubicacion`, `Activo.peso_bruto_vehicular/anio_modelo/sub_tipo_rem`, `DocumentoVigencia.emisor`.
+- Constructor + PAC mock + despachar + API. 85 tests en 2.5 s. API arrancada con uvicorn y recorrida con curl.
+- Revisión adversarial con workflow (4 lentes: SAT/XSD, contratos de agentes, API/residencia, tests/idempotencia) — hallazgos abajo.
 
 ### 22 ago — sesión 5 (F3)
 - Tools de validador/cumplimiento/seguimiento, flujo del coordinador, flota ADK (`InMemoryRunner`, sin LLM). 76 tests en 2.1 s.

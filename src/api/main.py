@@ -1,17 +1,18 @@
 """API de GARITA para Cloud Run. Dos vistas del frontend: cola de aprobación y expediente.
 
-Monta el servidor de ADK (agentes en src/agentes) y encima las rutas del negocio.
-Sin autenticación propia: el servicio se protege con IAM de Cloud Run (F5).
+Los agentes corren con el Runner de ADK dentro de `procesar`; el servidor de
+desarrollo de ADK (/run, /run_sse, sesiones) NO se monta aquí: expondría el
+agente `hello` y endpoints de pruebas. Sin autenticación propia: el servicio se
+protege con IAM de Cloud Run (F5).
 """
 
-from pathlib import Path
+import os
 
-from fastapi import APIRouter, HTTPException
-from google.adk.cli.fast_api import get_fast_api_app
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from agentes.coordinador import flujo
-from agentes.flota import procesar_viaje_adk
+from agentes.flota import procesar_viaje_adk, procesar_viaje_adk_simple
 from api.deps import construir_servicios
 from dominio.acciones import AccionNoPendiente, aprobar, cola_de_aprobacion, rechazar
 from dominio.enums import EstadoAccion, EstadoViaje
@@ -21,11 +22,10 @@ from infra.ledger import LedgerAlterado
 from infra.pac_mock import TimbradoRechazado
 from tools.carta_porte import CartaPorteIncompleta
 
-AGENTES_DIR = str(Path(__file__).resolve().parents[1] / "agentes")
-
-app = get_fast_api_app(agents_dir=AGENTES_DIR, web=False)
+app = FastAPI(title="GARITA", version="0.3")
 app.state.servicios = construir_servicios()
 api = APIRouter(prefix="/api")
+TENANT = os.environ.get("GARITA_TENANT", "tenant-cafe57-sintetico")
 
 
 def _s() -> flujo.Servicios:
@@ -77,7 +77,10 @@ def procesar(viaje_id: str) -> Viaje:
                      if any(b.abierto and b.accion_propuesta_id == a.accion_id for b in viaje.bloqueos)]
         if not aprobadas:
             raise HTTPException(409, "viaje bloqueado: esperando aprobación humana de la acción propuesta")
-        return flujo.reanudar_tras_aprobacion(viaje_id, aprobadas[0].accion_id, s)
+        try:
+            return flujo.reanudar_tras_aprobacion(viaje_id, aprobadas[0].accion_id, s, procesar=procesar_viaje_adk_simple)
+        except (ValueError, TransicionInvalida) as e:
+            raise HTTPException(409, str(e))
     if viaje.estado not in (EstadoViaje.borrador, EstadoViaje.validando):
         raise HTTPException(409, f"viaje en {viaje.estado}; no se procesa")
     viaje, _eventos = procesar_viaje_adk(viaje_id, s)
@@ -85,21 +88,23 @@ def procesar(viaje_id: str) -> Viaje:
 
 
 @api.post("/viajes/{viaje_id}/despachar")
-def despachar(viaje_id: str) -> dict:
+def despachar(viaje_id: str, cuerpo: Humano) -> dict:
+    """Efecto externo (timbrado): lo autoriza un humano con nombre; queda en el ledger."""
     try:
-        viaje, timbre = flujo.despachar(viaje_id, _s())
+        viaje, timbre = flujo.despachar(viaje_id, _s(), humano=cuerpo.humano)
+    except (CartaPorteIncompleta, TimbradoRechazado) as e:  # subclases de ValueError: van antes
+        raise HTTPException(422, str(e))
     except (ValueError, TransicionInvalida) as e:
         raise HTTPException(409, str(e))
-    except (CartaPorteIncompleta, TimbradoRechazado) as e:
-        raise HTTPException(422, str(e))
     return {"viaje": viaje, "timbre": timbre}
 
 
 @api.get("/acciones", response_model=list[AccionPropuesta])
-def acciones(estado: EstadoAccion = EstadoAccion.pendiente_aprobacion, tenant_id: str | None = None) -> list[AccionPropuesta]:
-    s = _s()
-    filtro = {"estado": estado} | ({"tenant_id": tenant_id} if tenant_id else {})
-    return s.repo.listar("acciones", AccionPropuesta, **filtro)
+def acciones(estado: EstadoAccion = EstadoAccion.pendiente_aprobacion, tenant_id: str = TENANT) -> list[AccionPropuesta]:
+    """La cola de aprobación. Siempre por tenant (se transporta, no se aísla: CLAUDE.md)."""
+    if estado == EstadoAccion.pendiente_aprobacion:
+        return cola_de_aprobacion(_s().repo, tenant_id)
+    return _s().repo.listar("acciones", AccionPropuesta, tenant_id=tenant_id, estado=estado)
 
 
 def _resolver_accion(accion_id: str, humano: str, fn) -> dict:
@@ -112,8 +117,14 @@ def _resolver_accion(accion_id: str, humano: str, fn) -> dict:
     except AccionNoPendiente as e:
         raise HTTPException(409, str(e))
     viaje = s.repo.obtener("viajes", accion.viaje_id, Viaje)
-    if accion.estado == EstadoAccion.aprobada and viaje is not None and viaje.estado == EstadoViaje.bloqueado:
-        viaje = flujo.reanudar_tras_aprobacion(accion.viaje_id, accion.accion_id, s)  # se revalida con la evidencia actual
+    if viaje is not None and viaje.estado == EstadoViaje.bloqueado:
+        if accion.estado == EstadoAccion.aprobada:
+            try:  # se revalida con la evidencia actual; si el bloqueo ya no está abierto, la aprobación queda y el viaje no cambia
+                viaje = flujo.reanudar_tras_aprobacion(accion.viaje_id, accion.accion_id, s, procesar=procesar_viaje_adk_simple)
+            except (ValueError, TransicionInvalida):
+                pass
+        elif accion.estado == EstadoAccion.rechazada:
+            viaje = flujo.reproponer_tras_rechazo(accion.viaje_id, s)  # el viaje no se queda sin salida
     return {"accion": accion, "viaje": viaje}
 
 
@@ -127,26 +138,33 @@ def rechazar_accion(accion_id: str, cuerpo: Humano) -> dict:
     return _resolver_accion(accion_id, cuerpo.humano, rechazar)
 
 
+ID_POR_COLECCION = {"activos": ("activo_id", Activo), "operadores": ("operador_id", Operador)}
+
+
 @api.put("/documentos/{documento_id}", response_model=DocumentoVigencia)
 def registrar_documento(documento_id: str, documento: DocumentoVigencia) -> DocumentoVigencia:
     """Alta manual de un documento ya extraído (la ingesta con Gemma/Gemini lo hará sola).
-    Actualiza el activo u operador que lo referencia por documento_id."""
+    Sustituye el documento en el activo u operador que lo referencia; el campo debe
+    corresponder al tipo del documento y el objeto se revalida completo."""
     s = _s()
     if documento.documento_id != documento_id:
         raise HTTPException(422, "documento_id del cuerpo no coincide con la ruta")
     actualizado = False
-    for coleccion, tipo in (("activos", Activo), ("operadores", Operador)):
+    for coleccion, (campo_id, tipo) in ID_POR_COLECCION.items():
         for obj in s.repo.listar(coleccion, tipo, tenant_id=documento.tenant_id):
-            for campo, valor in obj.model_dump().items():
+            datos = obj.model_dump(mode="json")
+            for campo, valor in datos.items():
                 if isinstance(valor, dict) and valor.get("documento_id") == documento_id:
-                    s.repo.guardar(coleccion, getattr(obj, f"{coleccion[:-1] if coleccion != 'activos' else 'activo'}_id"),
-                                   obj.model_copy(update={campo: documento}))
+                    if campo != documento.tipo:
+                        raise HTTPException(422, f"{documento_id} es {campo} en {coleccion}/{datos[campo_id]}; el cuerpo dice {documento.tipo}")
+                    s.repo.guardar(coleccion, datos[campo_id], tipo.model_validate(datos | {campo: documento.model_dump(mode="json")}))
                     actualizado = True
     if not actualizado:
         raise HTTPException(404, f"ningún activo u operador referencia {documento_id}")
     s.repo.guardar("documentos", documento_id, documento)
     s.ledger.append(tenant_id=documento.tenant_id, viaje_id="", tipo_evento="documento_registrado", actor="humano",
-                    payload={"documento_id": documento_id, "estado": documento.estado, "hash_documento": documento.hash_documento})
+                    payload={"documento_id": documento_id, "estado": documento.estado, "hash_documento": documento.hash_documento},
+                    idempotency_key=f"doc:{documento_id}:{documento.hash_documento}")
     return documento
 
 

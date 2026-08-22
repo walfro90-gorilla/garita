@@ -2,6 +2,7 @@ import secrets
 
 import pytest
 
+from dominio.modelos import EntradaLedger
 from infra.ledger import FirmadorLocalHmac, LedgerAlterado, LedgerService
 from infra.repository import InMemoryRepository
 
@@ -66,4 +67,19 @@ def test_persiste_en_repositorio():
     _llenar(ledger, 2)
     from dominio.modelos import EntradaLedger
 
-    assert repo.obtener("ledger", "t:1", EntradaLedger) == ledger.entradas[1]
+    assert repo.obtener("ledger", "000000000001", EntradaLedger) == ledger.entradas[1]
+
+
+def test_rehidrata_la_cadena_desde_el_repositorio():
+    """Cloud Run escala a cero: una instancia nueva continúa la cadena, no la pisa."""
+    repo, clave = InMemoryRepository(), secrets.token_bytes(32)
+    l1 = LedgerService(FirmadorLocalHmac(clave), repo=repo)
+    _llenar(l1, 2)
+    l1.append(tenant_id="t", viaje_id="v", tipo_evento="x", actor="a", payload={}, idempotency_key="k")
+    l2 = LedgerService(FirmadorLocalHmac(clave), repo=repo)
+    assert len(l2.entradas) == 3 and l2.verify()
+    assert l2.append(tenant_id="t", viaje_id="v", tipo_evento="x", actor="a", payload={}, idempotency_key="k").secuencia == 2
+    nueva = l2.append(tenant_id="t", viaje_id="v", tipo_evento="y", actor="a", payload={})
+    assert nueva.secuencia == 3 and nueva.hash_anterior == l1.entradas[2].hash
+    assert len(repo.listar("ledger", EntradaLedger)) == 4 and l2.verify()
+    assert l2.ultimo_hash("v") == nueva.hash and l2.ultimo_hash("otro") == "0" * 64

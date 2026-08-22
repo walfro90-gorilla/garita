@@ -32,9 +32,12 @@ class Servicios:
     repo: Any
     ledger: Any
     registro: ToolRegistry
-    hoy: date
+    hoy: date | None = None  # None = la fecha de hoy en cada llamada (producción); fija en tests
     publisher: Any = None
     pac: Any = None  # infra.pac_mock.PacMock en todos los entornos del hackathon
+
+    def fecha(self) -> date:
+        return self.hoy or date.today()
 
 
 class CartaPorteTimbrada(BaseModel):
@@ -56,11 +59,11 @@ def _expediente(viaje: Viaje, s: Servicios) -> tuple[Activo | None, list[Activo]
 
 
 def paso_validador(viaje: Viaje, s: Servicios) -> tuple[list[Bloqueo], HandoffResult]:
+    """El expediente con PII (Operador) lo carga el paso del validador, no el coordinador."""
     cross_check = s.registro.resolver("validador", "cross_check")
-    tractor, cajas, operador = _expediente(viaje, s)
     bloqueos, resultado = ejecutar_handoff(
         agente="validador", paso_id=f"validador:{viaje.viaje_id}",
-        llamar=lambda _err: cross_check(viaje, tractor, cajas, operador, s.hoy),
+        llamar=lambda _err: cross_check(viaje, *_expediente(viaje, s), s.fecha()),
         validar=LISTA_BLOQUEOS.validate_python, ledger=s.ledger, tenant_id=viaje.tenant_id,
         viaje_id=viaje.viaje_id, publisher=s.publisher,
     )
@@ -73,7 +76,7 @@ def paso_cumplimiento(viaje: Viaje, s: Servicios) -> tuple[list[Bloqueo], Handof
         agente="cumplimiento", paso_id=f"cumplimiento:{viaje.viaje_id}",
         llamar=lambda _err: vigencias_query(tenant_id=viaje.tenant_id, viaje_id=viaje.viaje_id,
                                             activo_ids=[viaje.tractor_id, *viaje.caja_ids],
-                                            operador_id=viaje.operador_id, hoy=s.hoy),
+                                            operador_id=viaje.operador_id, hoy=s.fecha()),
         validar=LISTA_BLOQUEOS.validate_python, ledger=s.ledger, tenant_id=viaje.tenant_id,
         viaje_id=viaje.viaje_id, publisher=s.publisher,
     )
@@ -89,7 +92,7 @@ def _o_fallo(bloqueos: list[Bloqueo] | None, r: HandoffResult, viaje: Viaje, s: 
         motivo=MotivoBloqueo.verificacion_fallida, severidad="duro",
         explicacion=f"{agente} no pudo verificar el viaje tras {r.intentos} intentos ({r.estado}); revisar dead-letter.",
         documento_id=None, evidencia_uri=f"expediente://dead_letters/dl-{r.paso_id}", accion_propuesta_id=None,
-        detectado_por=AGENTE, detectado_en=datetime.combine(s.hoy, time.min, tzinfo=timezone.utc),
+        detectado_por=AGENTE, detectado_en=datetime.combine(s.fecha(), time.min, tzinfo=timezone.utc),
     )]
 
 
@@ -110,7 +113,7 @@ def paso_seguimiento(viaje: Viaje, bloqueos: list[Bloqueo], s: Servicios) -> lis
     out: list[Bloqueo] = []
     for b in bloqueos:
         if b.severidad == "duro" and b.abierto:
-            accion = proponer_accion(bloqueo=b, tenant_id=viaje.tenant_id, viaje_id=viaje.viaje_id, hoy=s.hoy)
+            accion = proponer_accion(bloqueo=b, tenant_id=viaje.tenant_id, viaje_id=viaje.viaje_id, hoy=s.fecha())
             b = b.model_copy(update={"accion_propuesta_id": accion.accion_id})
         out.append(b)
     return out
@@ -118,6 +121,7 @@ def paso_seguimiento(viaje: Viaje, bloqueos: list[Bloqueo], s: Servicios) -> lis
 
 def decidir(viaje: Viaje, bloqueos: list[Bloqueo], s: Servicios) -> Viaje:
     """La decisión del coordinador: bloqueado o listo. Siempre queda en el ledger."""
+    entrada = viaje
     viaje = viaje.model_copy(update={"bloqueos": bloqueos})
     duros = viaje.bloqueos_duros_abiertos()
     decision = EstadoViaje.bloqueado if duros else EstadoViaje.listo
@@ -126,13 +130,17 @@ def decidir(viaje: Viaje, bloqueos: list[Bloqueo], s: Servicios) -> Viaje:
         payload={"decision": decision, "bloqueos_duros": [b.bloqueo_id for b in duros],
                  "bloqueos_blandos": [b.bloqueo_id for b in viaje.bloqueos if b.severidad == "blando"],
                  "acciones_propuestas": [b.accion_propuesta_id for b in duros if b.accion_propuesta_id]},
-        idempotency_key=clave_idempotencia(viaje.viaje_id, "decision", [b.model_dump(mode="json") for b in viaje.bloqueos]),
+        # Clave = viaje persistido + bloqueos detectados: un reintento tras caída parcial no duplica;
+        # una decisión igual tras una aprobación o evidencia nueva cambia el contenido y sí se registra.
+        idempotency_key=clave_idempotencia(viaje.viaje_id, "decision",
+                                           [entrada.model_dump(mode="json"), [b.model_dump(mode="json") for b in viaje.bloqueos]]),
     )
     return transitar(viaje, decision, ledger=s.ledger, repo=s.repo, actor=AGENTE)
 
 
-def procesar_viaje(viaje_id: str, s: Servicios) -> Viaje:
-    """Versión síncrona sin ADK (tests y API). `flota.py` hace lo mismo con agentes ADK."""
+def cargar_para_validar(viaje_id: str, s: Servicios) -> Viaje:
+    """Precondición común (síncrono y ADK): existe, y está en validando (borrador pasa a validando).
+    Se verifica ANTES de delegar nada, para no dejar decisiones fantasma en el ledger."""
     viaje = s.repo.obtener("viajes", viaje_id, Viaje)
     if viaje is None:
         raise KeyError(viaje_id)
@@ -140,45 +148,78 @@ def procesar_viaje(viaje_id: str, s: Servicios) -> Viaje:
         viaje = transitar(viaje, EstadoViaje.validando, ledger=s.ledger, repo=s.repo, actor=AGENTE)
     if viaje.estado != EstadoViaje.validando:
         raise ValueError(f"{viaje_id} está en {viaje.estado}; solo se procesa en validando")
+    return viaje
+
+
+def procesar_viaje(viaje_id: str, s: Servicios) -> Viaje:
+    """Versión síncrona sin ADK (tests). `flota.py` hace lo mismo con agentes ADK."""
+    viaje = cargar_para_validar(viaje_id, s)
     b_val, _ = paso_validador(viaje, s)
     b_cum, _ = paso_cumplimiento(viaje, s)
     bloqueos = paso_seguimiento(viaje, fusionar(viaje, b_val + b_cum), s)
     return decidir(viaje, bloqueos, s)
 
 
-def reanudar_tras_aprobacion(viaje_id: str, accion_id: str, s: Servicios) -> Viaje:
-    """Un humano aprobó la acción: bloqueado → validando y se vuelve a procesar."""
+def reanudar_tras_aprobacion(viaje_id: str, accion_id: str, s: Servicios, procesar=procesar_viaje) -> Viaje:
+    """Un humano aprobó la acción: bloqueado → validando y se vuelve a procesar (con `procesar`,
+    síncrono o ADK). Si la transición no procede (p. ej. el bloqueo ya no está abierto), TransicionInvalida."""
     viaje = s.repo.obtener("viajes", viaje_id, Viaje)
     accion = s.repo.obtener("acciones", accion_id, AccionPropuesta)
     if viaje is None or accion is None or accion.estado != EstadoAccion.aprobada:
         raise ValueError("se requiere un viaje bloqueado y una acción aprobada")
     transitar(viaje, EstadoViaje.validando, ledger=s.ledger, repo=s.repo, actor=AGENTE, accion=accion)
-    return procesar_viaje(viaje_id, s)
+    return procesar(viaje_id, s)
 
 
-def despachar(viaje_id: str, s: Servicios) -> tuple[Viaje, Any]:
-    """listo → en_ruta: construye la Carta Porte, la pasa por el PAC (mock) y sale.
-    El XML y el timbre quedan en el expediente; el hash del XML, en el ledger."""
+def reproponer_tras_rechazo(viaje_id: str, s: Servicios) -> Viaje:
+    """Un humano rechazó una acción: seguimiento propone otra para cada bloqueo duro abierto
+    cuya acción quedó rechazada. El viaje sigue bloqueado; no se queda sin salida."""
+    viaje = s.repo.obtener("viajes", viaje_id, Viaje)
+    if viaje is None or viaje.estado != EstadoViaje.bloqueado:
+        raise ValueError(f"{viaje_id} no está bloqueado")
+    proponer_accion = s.registro.resolver("seguimiento", "proponer_accion")
+    bloqueos = []
+    for b in viaje.bloqueos:
+        if b.severidad == "duro" and b.abierto:
+            accion = proponer_accion(bloqueo=b, tenant_id=viaje.tenant_id, viaje_id=viaje_id, hoy=s.fecha())
+            b = b.model_copy(update={"accion_propuesta_id": accion.accion_id})
+        bloqueos.append(b)
+    nuevo = viaje.model_copy(update={"bloqueos": bloqueos})
+    s.ledger.append(tenant_id=viaje.tenant_id, viaje_id=viaje_id, tipo_evento="acciones_repropuestas", actor=AGENTE,
+                    payload={"acciones": [b.accion_propuesta_id for b in bloqueos if b.severidad == "duro" and b.abierto]},
+                    idempotency_key=clave_idempotencia(viaje_id, "reproponer", [viaje.model_dump(mode="json")]))
+    s.repo.guardar("viajes", viaje_id, nuevo)
+    return nuevo
+
+
+def despachar(viaje_id: str, s: Servicios, *, humano: str) -> tuple[Viaje, Any]:
+    """listo → en_ruta. El timbrado es un efecto externo (ADR-005): lo autoriza un HUMANO y
+    queda con su nombre en el ledger. El validador construye la Carta Porte (tool de su scope);
+    el PAC (mock) la timbra; el XML y el timbre quedan en el expediente; el hash, en el ledger."""
     from infra.pac_mock import PacMock
     from tools.carta_porte import id_ccp
 
+    if not humano:
+        raise ValueError("despachar exige el nombre del humano que autoriza")
     construir_carta_porte = s.registro.resolver("validador", "construir_carta_porte")
+    xsd_validate = s.registro.resolver("validador", "xsd_validate")
 
     viaje = s.repo.obtener("viajes", viaje_id, Viaje)
     if viaje is None or viaje.estado != EstadoViaje.listo:
         raise ValueError(f"{viaje_id} no está en listo")
-    tractor, cajas, operador = _expediente(viaje, s)
     transportista = s.repo.obtener("transportistas", viaje.tenant_id, Transportista)
     if transportista is None:
         raise ValueError(f"no hay transportista para {viaje.tenant_id}")
-    xml = construir_carta_porte(viaje, tractor, cajas, operador, transportista)
+    xml = construir_carta_porte(viaje, *_expediente(viaje, s), transportista)
     timbre = (s.pac or PacMock()).timbrar(xml)
     s.ledger.append(
-        tenant_id=viaje.tenant_id, viaje_id=viaje_id, tipo_evento="carta_porte_timbrada_mock", actor=AGENTE,
-        payload={"id_ccp": id_ccp(viaje_id), "uuid": timbre.uuid, "hash_xml": timbre.hash_xml, "pac": timbre.pac},
+        tenant_id=viaje.tenant_id, viaje_id=viaje_id, tipo_evento="carta_porte_timbrada_mock", actor=humano,
+        payload={"id_ccp": id_ccp(viaje_id), "uuid": timbre.uuid, "hash_xml": timbre.hash_xml, "pac": timbre.pac,
+                 "autorizado_por": humano},
         idempotency_key=clave_idempotencia(viaje_id, "timbrado", timbre.hash_xml),
     )
     s.repo.guardar("cartas_porte", viaje_id, CartaPorteTimbrada(
         viaje_id=viaje_id, tenant_id=viaje.tenant_id, id_ccp=id_ccp(viaje_id), uuid=timbre.uuid,
         hash_xml=timbre.hash_xml, xml=xml.decode("utf-8")))
-    return transitar(viaje, EstadoViaje.en_ruta, ledger=s.ledger, repo=s.repo, actor=AGENTE, carta_porte_xml=xml), timbre
+    return transitar(viaje, EstadoViaje.en_ruta, ledger=s.ledger, repo=s.repo, actor=humano,
+                     carta_porte_xml=xml, xsd_validate=xsd_validate), timbre

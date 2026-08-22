@@ -51,10 +51,34 @@ ground truth. Every name, CURP, RFC, plate and folio is fake.
 No real RFC, CURP, plate, license or company name appears anywhere. Synthetic
 RFCs use the `XAXX` prefix; plates and folios use `TEST-`.
 
-## Multi-tenancy
+## Out of scope, on purpose
 
-Every persisted model carries `tenant_id`. Isolation logic is out of scope for
-the hackathon and is not implemented.
+- **Real stamping (PAC).** `infra/pac_mock.py` implements the PAC contract,
+  validates the XML against the XSD and returns a `TEST-` UUID. No PAC is ever
+  called. Said explicitly in the video.
+- **NOM-151 certificate.** The hash-chained, KMS-signed ledger is the substrate;
+  the legal certificate would come from an accredited PSC in production.
+- **Multi-tenancy.** Every persisted model carries `tenant_id`; isolation logic
+  is not implemented.
+- **ERP / M3 integration, shipper portal, US-side systems (SCAC, DOT, FMCSA).**
+
+## How a trip gets blocked
+
+1. `POST /api/viajes/{id}/procesar` runs the fleet (ADK: `coordinador` →
+   `validador` ‖ `cumplimiento` → `seguimiento`). Deterministic agents check the
+   case file against the SAT catalogs and every document's validity.
+2. Any hard finding — an expired inspection, a missing plate, a tariff code
+   that is not in the catalog — becomes a `Bloqueo` with a reason a traffic
+   coordinator can read, the evidence URI, and a proposed action. The trip goes
+   to `bloqueado`. The decision is written to the hash-chained ledger first.
+3. The proposed action waits in `GET /api/acciones` until a human approves it.
+   Approval authorizes the external effect (request the renewal); it does not
+   make the truck legal. Only new evidence — the renewed document — clears the
+   block on the next `procesar`.
+4. `POST /api/viajes/{id}/despachar` builds the Carta Porte 3.1 complement from
+   the case file, validates it against the official XSD and sends it to a
+   **mock PAC** that never stamps anything real (`TEST-` UUIDs). The trip goes
+   `en_ruta`; the XML hash is in the ledger.
 
 ## Run locally
 
@@ -62,10 +86,16 @@ the hackathon and is not implemented.
 uv venv .venv --python 3.12
 uv pip install --python .venv/bin/python -r requirements-dev.txt
 cp .env.example .env           # then set GOOGLE_CLOUD_PROJECT
-.venv/bin/pytest
-.venv/bin/adk api_server src/agentes --port 8000
-curl localhost:8000/list-apps  # → ["hello"]
+.venv/bin/pytest               # 85 tests, no GCP needed
+GARITA_SEED_DEMO=1 PYTHONPATH=src .venv/bin/uvicorn api.main:app --port 8000
+curl -X POST localhost:8000/api/viajes/viaje-1/procesar   # → "estado": "bloqueado"
+curl localhost:8000/api/acciones                           # → the renewal waiting for approval
+curl localhost:8000/docs                                   # OpenAPI; /list-apps is the ADK server
 ```
+
+`GARITA_SEED_DEMO=1` loads the synthetic Café 57 case file (one tractor with an
+expired mechanical inspection). `GARITA_BACKEND=firestore` switches to Firestore
+and Cloud KMS in `northamerica-south1`.
 
 ## Deploy the F0 hello-world to Cloud Run (Querétaro)
 

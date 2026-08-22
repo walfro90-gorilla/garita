@@ -1,5 +1,8 @@
 """Expediente sintético de Café 57 para tests y demo. Prefijos obligatorios: XAXX (RFC), TEST- (placas, folios).
 
+Placas: el patrón PlacaVM del SAT prohíbe guiones, así que las placas sintéticas son TEST001/TEST002
+(prefijo TEST sin guion). Folios sí llevan TEST-.
+
 Un tractor con la verificación físico-mecánica VENCIDA (el caso del video), una caja,
 un operador y el permisionario. `verificacion_vencida=False` simula la renovación ingresada.
 """
@@ -7,7 +10,7 @@ un operador y el permisionario. `verificacion_vencida=False` simula la renovaci�
 from datetime import date, datetime
 
 from dominio.enums import EstadoVigencia, TipoDocumento
-from dominio.modelos import Activo, DocumentoVigencia, Mercancia, Operador, Transportista, Ubicacion, Viaje
+from dominio.modelos import Activo, DocumentoVigencia, Domicilio, Mercancia, Operador, Transportista, Ubicacion, Viaje
 
 TENANT = "tenant-cafe57-sintetico"
 RFC = "XAXX010101000"
@@ -29,13 +32,16 @@ def viaje(**cambios) -> Viaje:
         transp_internac=True, entrada_salida_merc="Salida", pais_origen_destino="USA", via_entrada_salida="01",
         regimenes_aduaneros=["EXD"],
         mercancias=[Mercancia(clave_prod_serv_cp="10101500", descripcion="Arneses sintéticos", cantidad=10,
-                              clave_unidad="H87", peso_en_kg=1200, fraccion_arancelaria="01011001",
+                              clave_unidad="H87", peso_en_kg=1200, fraccion_arancelaria="01011001", tipo_materia="03",
                               valor_mercancia=1000.0, moneda="USD")],
         ubicaciones=[
             Ubicacion(tipo_ubicacion="Origen", id_ubicacion="OR000001", rfc_remitente_destinatario=RFC,
-                      fecha_hora_salida_llegada=datetime(2026, 8, 23, 5, 0)),
+                      fecha_hora_salida_llegada=datetime(2026, 8, 23, 5, 0),
+                      domicilio=Domicilio(calle="Calle Sintetica 123", estado="CHH", pais="MEX", codigo_postal="32000")),
             Ubicacion(tipo_ubicacion="Destino", id_ubicacion="DE000001", rfc_remitente_destinatario="XEXX010101000",
-                      fecha_hora_salida_llegada=datetime(2026, 8, 23, 9, 0), distancia_recorrida=350.0),
+                      fecha_hora_salida_llegada=datetime(2026, 8, 23, 9, 0), distancia_recorrida=350.0,
+                      num_reg_id_trib="TEST-EIN-000000", residencia_fiscal="USA",
+                      domicilio=Domicilio(calle="Synthetic Rd 1", estado="TX", pais="USA", codigo_postal="79901")),
         ],
     )
     return Viaje(**(base | cambios))
@@ -60,7 +66,7 @@ def sembrar_expediente(repo, *, verificacion_vencida: bool = True) -> None:
         sub_tipo_rem="CTR004"))
     repo.guardar("operadores", "operador-1", Operador(
         operador_id="operador-1", tenant_id=TENANT, nombre="OPERADOR SINTETICO UNO", curp="TEST900101HCHRST01",
-        licencia_federal=documento(documento_id="doc-lic-0001"), visa_fast=None))
+        rfc="XAXX900101AB1", licencia_federal=documento(documento_id="doc-lic-0001"), visa_fast=None))
     repo.guardar("transportistas", TENANT, Transportista(
         tenant_id=TENANT, rfc=RFC, razon_social="Transportes Sinteticos SA de CV", tipo_permiso_sict="TPAF01",
         permiso_sict=documento(documento_id="doc-perm-0001", tipo=TipoDocumento.permiso_sict, folio="TEST-PERM-0001",

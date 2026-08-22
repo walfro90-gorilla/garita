@@ -61,7 +61,7 @@ def handler_dead_letter(repo, ledger, tenant_id: str) -> Callable[[dict[str, Any
     def manejar(mensaje: dict[str, Any]) -> None:
         dl_id = f"dl-{mensaje.get('paso_id', 'sin-paso')}"
         repo.guardar("dead_letters", dl_id, DeadLetter(dead_letter_id=dl_id, tenant_id=tenant_id, mensaje=mensaje))
-        ledger.append(tenant_id=tenant_id, viaje_id=mensaje.get("viaje_id", ""), tipo_evento="dead_letter_expediente",
+        ledger.append(tenant_id=mensaje.get("tenant_id", tenant_id), viaje_id=mensaje.get("viaje_id", ""), tipo_evento="dead_letter_expediente",
                       actor="pubsub", payload={"dead_letter_id": dl_id}, idempotency_key=f"dlx:{dl_id}")
 
     return manejar

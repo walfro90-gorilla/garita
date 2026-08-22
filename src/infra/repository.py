@@ -4,6 +4,7 @@ Sin aislamiento por tenant (CLAUDE.md <forbidden_actions>): `tenant_id` viaja
 dentro del documento y nada más.
 """
 
+import threading
 from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel
@@ -22,20 +23,21 @@ class Repository(Protocol):
 class InMemoryRepository:
     def __init__(self) -> None:
         self._docs: dict[tuple[str, str], dict[str, Any]] = {}
+        self._lock = threading.Lock()
 
     def guardar(self, coleccion: str, doc_id: str, modelo: BaseModel) -> None:
-        self._docs[(coleccion, doc_id)] = modelo.model_dump(mode="json")
+        with self._lock:
+            self._docs[(coleccion, doc_id)] = modelo.model_dump(mode="json")
 
     def obtener(self, coleccion: str, doc_id: str, tipo: type[M]) -> M | None:
-        datos = self._docs.get((coleccion, doc_id))
+        with self._lock:
+            datos = self._docs.get((coleccion, doc_id))
         return None if datos is None else tipo.model_validate(datos)
 
     def listar(self, coleccion: str, tipo: type[M], **igual: Any) -> list[M]:
-        return [
-            tipo.model_validate(d)
-            for (c, _), d in self._docs.items()
-            if c == coleccion and all(d.get(k) == v for k, v in igual.items())
-        ]
+        with self._lock:
+            docs = [d for (c, _), d in self._docs.items() if c == coleccion]
+        return [tipo.model_validate(d) for d in docs if all(d.get(k) == v for k, v in igual.items())]
 
 
 class FirestoreRepository:

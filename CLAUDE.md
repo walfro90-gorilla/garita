@@ -216,11 +216,11 @@ Este archivo es el mecanismo de memoria entre sesiones. Si está desactualizado,
 </session_protocol>
 
 <current_phase>
-**F3 parte local completa (22 ago) → constructor de Carta Porte + API (F5 adelantada) + ensayo de video**
+**F3 + Carta Porte + API completos en local (22 ago) → F3.5 ensayo de video, frontend mínimo, Dockerfile**
 
-ADRs vigentes: 003 (Gemini no está en `northamerica-south1`), 008 (firma detrás de `Firmador`), 009 (Gemini solo recibe texto redactado), 010 (flota determinista; dead-letter bloquea; la evidencia libera, la aprobación no).
+ADRs vigentes: 003 (Gemini no está en `northamerica-south1`), 008 (firma detrás de `Firmador`), 009 (Gemini solo recibe texto redactado), 010 (flota determinista; dead-letter bloquea; la evidencia libera, la aprobación no; despacho por humano; idempotencia por contenido persistido).
 
-Bloqueo abierto: facturación de `garita-hackathon` (pendiente del humano). Sin ella no hay Cloud Run, Gemma en MX, Gemini, Pub/Sub. Todo lo demás corre local (suite 76).
+Bloqueo abierto: facturación de `garita-hackathon` (pendiente del humano). Sin ella no hay Cloud Run, Gemma en MX, Gemini, Pub/Sub. Todo lo demás corre local (suite 91; API con uvicorn).
 
 Siguiente acción: ver "Siguiente acción concreta" en `docs/PROGRESS.md`.
 </current_phase>

@@ -41,6 +41,32 @@ que `cumplimiento` y `seguimiento` no tengan espacio para alucinar.
    `idempotency_key = sha256(viaje_id + "decision" + hash(bloqueos))`, y
    `LedgerService.append` devuelve la entrada existente si la clave se repite.
 
+## Addendum (22 ago, tras revisión adversarial)
+
+6. **El despacho lo autoriza un humano.** El timbrado es un efecto externo
+   (ADR-005) aunque el PAC sea mock: `despachar(humano=…)` exige nombre y lo
+   escribe como `actor` en el ledger. El validador construye la Carta Porte
+   (`construir_carta_porte`, tool de su scope) y aporta `xsd_validate` a la
+   guarda `listo → en_ruta`; el dominio no importa tools.
+7. **Claves de idempotencia por contenido persistido.** `transicion_viaje` y
+   `decision_coordinador` usan `sha256(viaje persistido + bloqueos detectados)`.
+   Un reintento tras una caída parcial (ledger escrito, Firestore no) no duplica;
+   un ciclo legítimo cambia el contenido (bloqueo resuelto, acción nueva) y sí
+   se registra. Además `LedgerService` se rehidrata del repositorio al arrancar
+   y serializa `append`: la cadena sobrevive a que Cloud Run escale a cero.
+8. **Rechazar no deja al viaje sin salida.** Tras un rechazo, `seguimiento`
+   propone otra acción (`acc-…-2`) para cada bloqueo duro abierto.
+9. **Una excepción de tool es un intento fallido**, no una caída del proceso:
+   va a dead-letter con el error y bloquea el viaje con `verificacion_fallida`.
+10. **El servidor de desarrollo de ADK no se monta en la API**: expondría
+    `/run`, sesiones y el agente `hello` (que llama a Gemini). Los agentes corren
+    con el `Runner` de ADK dentro de `/api/viajes/{id}/procesar`.
+11. No se hace (a propósito): `ToolRegistry` no liga identidad de proceso
+    (el aislamiento es por nombre de agente y se prueba; la identidad real la
+    dará Agent Identity de GEAP si entra en F4); `max_turns` espera a que exista
+    un `LlmAgent`; la vista de expediente muestra CURP y nombre al coordinador
+    de tráfico porque es su trabajo verlos.
+
 ## Consecuencias
 
 - La prueba de caos del video (SPEC §F3) es `tests/test_caos_cumplimiento_devuelve_basura`:

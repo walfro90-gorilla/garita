@@ -23,8 +23,6 @@ from google.genai import types
 from pydantic import ConfigDict, Field, TypeAdapter
 
 from agentes.coordinador import flujo
-from dominio.enums import EstadoViaje
-from dominio.estados import transitar
 from dominio.modelos import Bloqueo, Viaje
 
 LISTA = TypeAdapter(list[Bloqueo])
@@ -65,9 +63,7 @@ class Seguimiento(_Agente):
 class Coordinador(_Agente):
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         s = self.servicios
-        viaje = s.repo.obtener("viajes", ctx.session.state["viaje_id"], Viaje)
-        if viaje.estado == EstadoViaje.borrador:
-            viaje = transitar(viaje, EstadoViaje.validando, ledger=s.ledger, repo=s.repo, actor=flujo.AGENTE)
+        viaje = flujo.cargar_para_validar(ctx.session.state["viaje_id"], s)  # misma guarda que el camino síncrono
         yield self._evento(ctx, viaje=viaje.model_dump(mode="json"))
         async for evento in self.sub_agents[0].run_async(ctx):
             yield evento
@@ -92,5 +88,10 @@ def procesar_viaje_adk(viaje_id: str, servicios: flujo.Servicios) -> tuple[Viaje
         mensaje = types.Content(role="user", parts=[types.Part(text=f"procesar {viaje_id}")])
         return [e async for e in runner.run_async(user_id="coordinador-trafico", session_id=viaje_id, new_message=mensaje)]
 
-    eventos = asyncio.run(_correr())
+    eventos = asyncio.run(_correr())  # una excepción en un agente se propaga: no se traga
     return servicios.repo.obtener("viajes", viaje_id, Viaje), eventos
+
+
+def procesar_viaje_adk_simple(viaje_id: str, servicios: flujo.Servicios) -> Viaje:
+    """Firma compatible con flujo.procesar_viaje, para reanudar_tras_aprobacion(procesar=...)."""
+    return procesar_viaje_adk(viaje_id, servicios)[0]

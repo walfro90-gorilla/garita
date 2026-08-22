@@ -59,6 +59,7 @@ class Operador(_Modelo):
     tenant_id: str
     nombre: str  # PII
     curp: str | None  # PII
+    rfc: str | None = None  # PII; RFCFigura en la Carta Porte
     licencia_federal: DocumentoVigencia  # tipo E
     visa_fast: DocumentoVigencia | None
 
@@ -103,8 +104,15 @@ class Mercancia(_Modelo):
     clave_unidad: str  # c_ClaveUnidad
     peso_en_kg: float = Field(gt=0)
     fraccion_arancelaria: str | None  # c_FraccionArancelaria, obligatoria si transp_internac
+    tipo_materia: str | None = None  # c_TipoMateria, obligatoria si transp_internac
     valor_mercancia: float | None = None
     moneda: str | None = None
+
+    @model_validator(mode="after")
+    def _valor_con_moneda(self) -> "Mercancia":
+        if (self.valor_mercancia is None) != (self.moneda is None):
+            raise ValueError("valor_mercancia y moneda van juntos")
+        return self
 
 
 class Bloqueo(_Modelo):
@@ -146,6 +154,17 @@ class AccionPropuesta(_Modelo):
         return self
 
 
+class Domicilio(_Modelo):
+    """Nodo Domicilio. Obligatorio en Origen y Destino para autotransporte. Nombres del SAT."""
+
+    calle: str
+    estado: str  # c_Estado (CHH, TX…)
+    pais: str  # c_Pais
+    codigo_postal: str
+    municipio: str | None = None
+    colonia: str | None = None
+
+
 class Ubicacion(_Modelo):
     """Nodo Ubicacion de la Carta Porte. Nombres del SAT."""
 
@@ -154,14 +173,24 @@ class Ubicacion(_Modelo):
     rfc_remitente_destinatario: str
     fecha_hora_salida_llegada: datetime  # sin zona: hora local, como exige t_FechaH
     distancia_recorrida: float | None = None  # km, solo Destino
+    domicilio: Domicilio
+    num_reg_id_trib: str | None = None  # obligatorio si el RFC es el genérico extranjero XEXX010101000
+    residencia_fiscal: str | None = None  # c_Pais, obligatorio con num_reg_id_trib
 
     @model_validator(mode="after")
-    def _id_segun_tipo(self) -> "Ubicacion":
+    def _coherencia(self) -> "Ubicacion":
         prefijo = "OR" if self.tipo_ubicacion == "Origen" else "DE"
         if not (self.id_ubicacion.startswith(prefijo) and len(self.id_ubicacion) == 8 and self.id_ubicacion[2:].isdigit()):
             raise ValueError(f"id_ubicacion debe ser {prefijo} + 6 dígitos")
         if self.tipo_ubicacion == "Destino" and self.distancia_recorrida is None:
             raise ValueError("Destino exige distancia_recorrida")
+        if self.tipo_ubicacion == "Origen" and self.distancia_recorrida is not None:
+            raise ValueError("Origen no lleva distancia_recorrida")
+        extranjero = self.rfc_remitente_destinatario == "XEXX010101000"
+        if extranjero and not (self.num_reg_id_trib and self.residencia_fiscal):
+            raise ValueError("RFC extranjero genérico exige num_reg_id_trib y residencia_fiscal")
+        if self.residencia_fiscal == "MEX":
+            raise ValueError("residencia_fiscal no puede ser MEX")
         return self
 
 
@@ -193,6 +222,10 @@ class Viaje(_Modelo):
                 raise ValueError(f"transp_internac exige {faltan}")
             if self.pais_origen_destino == "MEX":
                 raise ValueError("pais_origen_destino no puede ser MEX en transporte internacional")
+        elif self.regimenes_aduaneros:
+            raise ValueError("un viaje nacional no lleva regimenes_aduaneros")
+        if len(set(self.regimenes_aduaneros)) != len(self.regimenes_aduaneros):
+            raise ValueError("regimenes_aduaneros repetidos")
         return self
 
     def bloqueos_duros_abiertos(self) -> list[Bloqueo]:
