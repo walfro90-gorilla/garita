@@ -218,9 +218,9 @@ Este archivo es el mecanismo de memoria entre sesiones. Si está desactualizado,
 <current_phase>
 **F0 · Fundación — sáb 22 ago**
 
-Bloqueo abierto: verificar disponibilidad de Gemini 3.5 en `northamerica-south1` (Querétaro) vía Vertex AI, y escribir `docs/adr/003-data-residency.md` con el resultado.
+ADR-003 resuelto (22 ago): Gemini 3.5 NO se sirve desde `northamerica-south1`. PII se queda en México; solo payloads redactados van a Vertex AI (`global`). Ver `docs/adr/003-data-residency.md`.
 
-Esta decisión condiciona toda la arquitectura de datos. No avanzar a F1 sin resolverla.
+Bloqueo abierto: facturación del proyecto `garita-hackathon` (pendiente del humano, pasos en `docs/PROGRESS.md`). Sin ella no hay Cloud Run.
 
-Siguiente acción: desplegar un agente ADK hello-world a Cloud Run en región Querétaro y capturar la consola.
+Siguiente acción: `scripts/deploy_hello.sh` en cuanto haya facturación; mientras tanto arrancar F1 (`src/dominio/`), que no necesita GCP.
 </current_phase>
