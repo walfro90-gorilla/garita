@@ -8,39 +8,17 @@ from datetime import date
 import pytest
 
 from agentes.coordinador.flujo import Servicios, procesar_viaje, reanudar_tras_aprobacion
-from conftest import TENANT, documento, viaje
+from conftest import TENANT
+from dominio.sintetico import sembrar_expediente as expediente
 from dominio.acciones import aprobar, cola_de_aprobacion
-from dominio.enums import EstadoAccion, EstadoViaje as E, EstadoVigencia, MotivoBloqueo, TipoAccion, TipoDocumento
-from dominio.modelos import Activo, Mercancia, Operador, Viaje
+from dominio.enums import EstadoAccion, EstadoViaje as E, MotivoBloqueo, TipoAccion
+from dominio.modelos import Viaje
 from infra.ledger import FirmadorLocalHmac, LedgerService
 from infra.pubsub import DeadLetter, InMemoryPublisher, handler_dead_letter
 from infra.repository import InMemoryRepository
 from tools.registry import registro_por_defecto
 
 HOY = date(2026, 8, 22)
-
-
-def expediente(repo, *, verificacion_vencida=True):
-    """Café 57 sintético: tractor TEST001 con verificación vencida el 2026-07-01, caja, operador."""
-    verif = documento(documento_id="doc-verif-0001", tipo=TipoDocumento.verificacion_fisico_mecanica, folio="TEST-VFM-0001",
-                      fecha_vencimiento=date(2026, 7, 1) if verificacion_vencida else date(2027, 7, 1),
-                      estado=EstadoVigencia.vencido if verificacion_vencida else EstadoVigencia.vigente,
-                      fuente_uri="gs://garita-sintetico/verificacion_fisico_mecanica_vencida.jpg")
-    poliza = documento(documento_id="doc-pol-0001", tipo=TipoDocumento.poliza_responsabilidad_civil, folio="TEST-POL-0001",
-                       fecha_vencimiento=date(2026, 9, 10), estado=EstadoVigencia.vigente)
-    tarjeta = documento(documento_id="doc-tc-0001", tipo=TipoDocumento.tarjeta_circulacion, folio="TEST-TC-0001")
-    repo.guardar("activos", "tractor-1", Activo(activo_id="tractor-1", tenant_id=TENANT, tipo="tractor", placa="TEST001",
-                 numero_economico="T-01", config_autotransporte="T3S2", tarjeta_circulacion=tarjeta,
-                 verificacion_fisico_mecanica=verif, poliza_responsabilidad_civil=poliza))
-    repo.guardar("activos", "caja-1", Activo(activo_id="caja-1", tenant_id=TENANT, tipo="caja", placa="TEST002",
-                 numero_economico="C-01", config_autotransporte=None,
-                 tarjeta_circulacion=documento(documento_id="doc-tc-0002"),
-                 verificacion_fisico_mecanica=documento(documento_id="doc-verif-0002", tipo=TipoDocumento.verificacion_fisico_mecanica),
-                 poliza_responsabilidad_civil=documento(documento_id="doc-pol-0002", tipo=TipoDocumento.poliza_responsabilidad_civil)))
-    repo.guardar("operadores", "operador-1", Operador(operador_id="operador-1", tenant_id=TENANT, nombre="OPERADOR SINTETICO UNO",
-                 curp="TEST900101HCHRST01", licencia_federal=documento(documento_id="doc-lic-0001"), visa_fast=None))
-    repo.guardar("viajes", "viaje-1", viaje(mercancias=[Mercancia(clave_prod_serv_cp="10101500", descripcion="Arneses sintéticos",
-                 cantidad=10, clave_unidad="H87", peso_en_kg=1200, fraccion_arancelaria="01011001")]))
 
 
 @pytest.fixture
@@ -143,3 +121,24 @@ def test_coordinador_no_puede_resolver_tools_de_otros(s):
     for tool in ("cross_check", "vigencias_query", "proponer_accion", "storage_read"):
         with pytest.raises(ToolFueraDeScope):
             s.registro.resolver("coordinador", tool)
+
+
+def test_despachar_timbra_con_mock_y_sale(s):
+    from agentes.coordinador.flujo import CartaPorteTimbrada, despachar
+
+    expediente(s.repo, verificacion_vencida=False)
+    assert procesar_viaje("viaje-1", s).estado == E.listo
+    v, timbre = despachar("viaje-1", s)
+    assert v.estado == E.en_ruta and timbre.uuid.startswith("TEST-") and timbre.pac.startswith("PAC-MOCK")
+    cp = s.repo.obtener("cartas_porte", "viaje-1", CartaPorteTimbrada)
+    assert cp.id_ccp.startswith("CCC") and cp.hash_xml == timbre.hash_xml and "TEST001" in cp.xml
+    assert [e.tipo_evento for e in s.ledger.entradas][-2:] == ["carta_porte_timbrada_mock", "transicion_viaje"]
+    assert s.ledger.verify()
+
+
+def test_despachar_bloqueado_no_sale(s):
+    from agentes.coordinador.flujo import despachar
+
+    procesar_viaje("viaje-1", s)
+    with pytest.raises(ValueError, match="no está en listo"):
+        despachar("viaje-1", s)

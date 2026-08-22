@@ -11,7 +11,7 @@ from typing import Any
 SCOPES: dict[str, frozenset[str]] = {
     "coordinador": frozenset({"delegar", "leer_expediente"}),
     "ingesta": frozenset({"storage_read", "gemma_redact", "gemini_extract", "firestore_write"}),
-    "validador": frozenset({"xsd_validate", "catalogo_lookup", "cross_check"}),
+    "validador": frozenset({"xsd_validate", "catalogo_lookup", "cross_check", "construir_carta_porte"}),
     "cumplimiento": frozenset({"vigencias_query", "ctpat_msc_lookup", "memory_bank"}),
     "seguimiento": frozenset({"memory_bank", "proponer_accion"}),
 }
@@ -50,6 +50,7 @@ def registro_por_defecto(repo=None) -> ToolRegistry:
     from functools import partial
 
     from tools.catalogo_lookup import catalogo_lookup
+    from tools.carta_porte import construir_carta_porte
     from tools.cross_check import cross_check
     from tools.xsd_validate import xsd_validate
 
@@ -57,6 +58,7 @@ def registro_por_defecto(repo=None) -> ToolRegistry:
     registro.registrar("xsd_validate", xsd_validate)
     registro.registrar("catalogo_lookup", catalogo_lookup)
     registro.registrar("cross_check", cross_check)
+    registro.registrar("construir_carta_porte", construir_carta_porte)
     if repo is not None:
         from tools.firestore_write import firestore_write
         from tools.proponer_accion import proponer_accion
