@@ -12,18 +12,18 @@ import hashlib
 import logging
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict
 
 from dominio.enums import EstadoHandoff, TipoDocumento
 from dominio.modelos import DocumentoVigencia, HandoffResult
 from dominio.vigencias import estado_vigencia
 from infra.frontera import FugaPII, afirmar_sin_pii
+from infra.handoff import ejecutar_handoff
 from tools.gemini_extract import ExtraccionDocumento
 from tools.registry import ToolRegistry
 
 log = logging.getLogger("garita.ingesta")
 AGENTE = "ingesta"
-MAX_INTENTOS = 3
 
 
 class MapaRedaccion(BaseModel):
@@ -47,6 +47,7 @@ def ingerir(
     ledger,
     hoy: date,
     nombres_conocidos: tuple[str, ...] = (),
+    publisher=None,
 ) -> HandoffResult:
     paso_id = f"ingesta:{documento_id}"
     storage_read = registro.resolver(AGENTE, "storage_read")
@@ -66,23 +67,15 @@ def ingerir(
         return HandoffResult(agente=AGENTE, paso_id=paso_id, estado=EstadoHandoff.dead_letter, intentos=0,
                              error_validacion=str(e))
 
-    extraccion: ExtraccionDocumento | None = None
-    error_previo: str | None = None
-    intentos = 0
-    while extraccion is None and intentos < MAX_INTENTOS:
-        intentos += 1
-        crudo = gemini_extract(redaccion.texto_redactado, tipo_sugerido, error_previo)
-        try:
-            extraccion = ExtraccionDocumento.model_validate_json(crudo)
-        except ValidationError as e:
-            error_previo = str(e)
-            log.warning("handoff inválido documento_id=%s intento=%d", documento_id, intentos)
-
+    extraccion, resultado = ejecutar_handoff(
+        agente=AGENTE, paso_id=paso_id,
+        llamar=lambda error_previo: gemini_extract(redaccion.texto_redactado, tipo_sugerido, error_previo),
+        validar=ExtraccionDocumento.model_validate_json, ledger=ledger, tenant_id=tenant_id, viaje_id="",
+        publisher=publisher,
+    )
     if extraccion is None:
-        ledger.append(tenant_id=tenant_id, viaje_id="", tipo_evento="dead_letter", actor=AGENTE,
-                      payload={"paso_id": paso_id, "intentos": intentos, "error": error_previo})
-        return HandoffResult(agente=AGENTE, paso_id=paso_id, estado=EstadoHandoff.dead_letter,
-                             intentos=intentos, error_validacion=error_previo)
+        return resultado
+    intentos = resultado.intentos
 
     documento = DocumentoVigencia(
         documento_id=documento_id,
