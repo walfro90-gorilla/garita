@@ -202,3 +202,4 @@ class EntradaLedger(_Modelo):
     hash: str
     firma: str  # hex
     firmado_por: str  # key_id del firmador
+    idempotency_key: str | None = None  # reejecutar el mismo paso no duplica la entrada

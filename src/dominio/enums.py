@@ -39,6 +39,7 @@ class MotivoBloqueo(StrEnum):
     catalogo_invalido = "catalogo_invalido"
     dato_inconsistente = "dato_inconsistente"
     revision_humana_pendiente = "revision_humana_pendiente"
+    verificacion_fallida = "verificacion_fallida"  # un agente no pudo verificar: no sale
 
 
 class TipoAccion(StrEnum):
