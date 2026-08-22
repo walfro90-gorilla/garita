@@ -216,11 +216,11 @@ Este archivo es el mecanismo de memoria entre sesiones. Si está desactualizado,
 </session_protocol>
 
 <current_phase>
-**F2 parte local completa (22 ago) → F3 · Flota multi-agente**
+**F3 parte local completa (22 ago) → constructor de Carta Porte + API (F5 adelantada) + ensayo de video**
 
-ADR-003: Gemini NO se sirve desde `northamerica-south1`. ADR-008: firma del ledger detrás de `Firmador`. ADR-009: Gemini solo recibe texto redactado; Gemma transcribe y redacta en MX; `infra.frontera.afirmar_sin_pii` es la compuerta.
+ADRs vigentes: 003 (Gemini no está en `northamerica-south1`), 008 (firma detrás de `Firmador`), 009 (Gemini solo recibe texto redactado), 010 (flota determinista; dead-letter bloquea; la evidencia libera, la aprobación no).
 
-Bloqueo abierto: facturación de `garita-hackathon` (pendiente del humano). Sin ella: ni Cloud Run, ni Gemma en MX, ni Gemini real. Todo lo demás corre local (suite 64).
+Bloqueo abierto: facturación de `garita-hackathon` (pendiente del humano). Sin ella no hay Cloud Run, Gemma en MX, Gemini, Pub/Sub. Todo lo demás corre local (suite 76).
 
-Siguiente acción: ver "Siguiente acción concreta" en `docs/PROGRESS.md` (F3 sin GCP: validador/cross_check, cumplimiento, seguimiento, coordinador, idempotencia).
+Siguiente acción: ver "Siguiente acción concreta" en `docs/PROGRESS.md`.
 </current_phase>
