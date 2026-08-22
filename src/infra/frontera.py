@@ -15,6 +15,11 @@ PATRONES_PII: dict[str, re.Pattern[str]] = {
 }
 
 
+# Toda etiqueta de PII debe ir seguida de un token "[...]". Cubre valores deformados por OCR
+# que ya no cumplen el patrón (p. ej. una CURP a la que le falta una letra).
+ETIQUETA_SIN_TOKEN = re.compile(r"\[?\b(CURP|RFC|NOMBRE|DOMICILIO|DIRECCI[OÓ]N)\]?\s*:\s*(?!\[)\S", re.IGNORECASE)
+
+
 class FugaPII(RuntimeError):
     pass
 
@@ -23,6 +28,8 @@ def afirmar_sin_pii(texto: str, valores_redactados: tuple[str, ...], *, document
     for nombre, patron in PATRONES_PII.items():
         if patron.search(texto):
             raise FugaPII(f"{documento_id}: patrón {nombre} presente en el payload hacia Gemini")
+    if m := ETIQUETA_SIN_TOKEN.search(texto):
+        raise FugaPII(f"{documento_id}: etiqueta {m.group(1).upper()} sin token en el payload hacia Gemini")
     for valor in valores_redactados:
         if valor and valor.upper() in texto.upper():
             raise FugaPII(f"{documento_id}: un valor del mapa de tokens reapareció en el payload")

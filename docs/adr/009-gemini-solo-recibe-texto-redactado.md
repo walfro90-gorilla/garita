@@ -41,6 +41,21 @@ documentada por Google para Gemma 3). Modelo base `gemma3:4b` (multimodal);
 el tamaño final se fija midiendo latencia en CPU en F3/F5. Ollama es runtime,
 no dependencia de Python: `<stack>` no cambia.
 
+## Medición (22 ago, Ollama local, `gemma3:4b`, 100 % CPU, 8 cores, 5 GB libres)
+
+- Transcripción de la licencia borrosa: correcta; la línea de vigencia
+  emborronada **se omite, no se inventa**.
+- Redacción por Gemma: **no ocurre**. Deja nombre, CURP y domicilio en claro;
+  a lo sumo antepone la etiqueta `[CURP]:` al valor. Además deforma la CURP
+  (`TEST900101HCRST01`, una letra menos), con lo que la regex de formato ya no
+  la reconoce.
+- Por eso la capa 2 y la compuerta trabajan **por etiqueta**, no solo por
+  formato: lo que sigue a `CURP:`, `RFC:`, `NOMBRE:`, `DOMICILIO:` se tokeniza
+  siempre, y la frontera rechaza cualquier etiqueta de PII sin token.
+- Latencia: 231 s de prompt-eval por imagen (encoder de visión en CPU) + 12 s
+  de generación. Medición contaminada por presión de memoria; se repite en
+  Cloud Run (8 vCPU / 16 GiB) antes de fijar tamaño de modelo y guion del video.
+
 ## Consecuencias
 
 - "Gemini multimodal" de SPEC §F2 se reinterpreta: lo multimodal es Gemma.
