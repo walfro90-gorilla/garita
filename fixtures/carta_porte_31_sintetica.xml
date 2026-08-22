@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Complemento Carta Porte 3.1 SINTÉTICO. RFC XAXX/XEXX, placas y folios TEST-. Ningún dato real. -->
+<cartaporte31:CartaPorte xmlns:cartaporte31="http://www.sat.gob.mx/CartaPorte31"
+    Version="3.1" IdCCP="CCC12345-1234-4234-8234-123456789ABC"
+    TranspInternac="Sí" EntradaSalidaMerc="Salida" PaisOrigenDestino="USA" ViaEntradaSalida="01"
+    TotalDistRec="350.00">
+  <cartaporte31:RegimenesAduaneros>
+    <cartaporte31:RegimenAduaneroCCP RegimenAduanero="EXD"/>
+  </cartaporte31:RegimenesAduaneros>
+  <cartaporte31:Ubicaciones>
+    <cartaporte31:Ubicacion TipoUbicacion="Origen" IDUbicacion="OR000001"
+        RFCRemitenteDestinatario="XAXX010101000" FechaHoraSalidaLlegada="2026-08-23T05:00:00"/>
+    <cartaporte31:Ubicacion TipoUbicacion="Destino" IDUbicacion="DE000001"
+        RFCRemitenteDestinatario="XEXX010101000" FechaHoraSalidaLlegada="2026-08-23T09:00:00"
+        DistanciaRecorrida="350.00"/>
+  </cartaporte31:Ubicaciones>
+  <cartaporte31:Mercancias PesoBrutoTotal="1200.000" UnidadPeso="KGM" NumTotalMercancias="1">
+    <cartaporte31:Mercancia BienesTransp="10101500" Descripcion="Arneses sintéticos de prueba"
+        Cantidad="10" ClaveUnidad="H87" PesoEnKg="1200.000"
+        FraccionArancelaria="01011001" ValorMercancia="1000.00" Moneda="USD"/>
+    <cartaporte31:Autotransporte PermSCT="TPAF01" NumPermisoSCT="TEST-PERM-0001">
+      <cartaporte31:IdentificacionVehicular ConfigVehicular="T3S2" PesoBrutoVehicular="30.00"
+          PlacaVM="TEST001" AnioModeloVM="2020"/>
+      <cartaporte31:Seguros AseguraRespCivil="Aseguradora Sintetica SA" PolizaRespCivil="TEST-POL-0001"/>
+      <cartaporte31:Remolques>
+        <cartaporte31:Remolque SubTipoRem="CTR004" Placa="TEST002"/>
+      </cartaporte31:Remolques>
+    </cartaporte31:Autotransporte>
+  </cartaporte31:Mercancias>
+  <cartaporte31:FiguraTransporte>
+    <cartaporte31:TiposFigura TipoFigura="01" RFCFigura="XAXX010101000"
+        NumLicencia="TEST-LIC-0001" NombreFigura="Operador Sintetico"/>
+  </cartaporte31:FiguraTransporte>
+</cartaporte31:CartaPorte>
