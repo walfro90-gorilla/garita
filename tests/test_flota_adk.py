@@ -15,3 +15,17 @@ def test_flota_adk_bloquea_el_viaje(s):  # noqa: F811
     assert autores.index("seguimiento") > max(autores.index("validador"), autores.index("cumplimiento"))
     assert eventos[-1].actions.state_delta["decision"] == "bloqueado"
     assert [e.tipo_evento for e in s.ledger.entradas] == ["transicion_viaje", "decision_coordinador", "transicion_viaje"]
+
+
+def test_flota_adk_misma_guarda_que_el_sincrono(s):  # noqa: F811
+    import pytest
+
+    from dominio.modelos import AccionPropuesta
+
+    procesar_viaje_adk("viaje-1", s)
+    n_ledger, n_acc = len(s.ledger.entradas), len(s.repo.listar("acciones", AccionPropuesta))
+    with pytest.raises(ValueError, match="solo se procesa en validando"):
+        procesar_viaje_adk("viaje-1", s)  # bloqueado: no corre sub-agentes ni escribe nada
+    assert (len(s.ledger.entradas), len(s.repo.listar("acciones", AccionPropuesta))) == (n_ledger, n_acc)
+    with pytest.raises(KeyError):
+        procesar_viaje_adk("no-existe", s)

@@ -20,7 +20,7 @@ def client(monkeypatch):
 
 def test_recorrido_del_demo(client):
     assert client.get("/api/salud").json()["pac"] == "mock"
-    assert client.get("/list-apps").status_code == 200  # el servidor ADK sigue montado
+    assert client.get("/list-apps").status_code == 404  # el servidor de desarrollo de ADK no se expone
 
     r = client.post("/api/viajes/viaje-1/procesar")
     assert r.status_code == 200 and r.json()["estado"] == "bloqueado"
@@ -48,10 +48,30 @@ def test_recorrido_del_demo(client):
     assert r.status_code == 200 and r.json()["estado"] == "listo" and r.json()["bloqueos"][0]["resuelto_por_accion_id"] is None
     assert client.post("/api/viajes/viaje-1/procesar").status_code == 409  # listo: ya no se procesa, se despacha
 
-    r = client.post("/api/viajes/viaje-1/despachar")
+    assert client.post("/api/viajes/viaje-1/despachar").status_code == 422  # sin humano no hay despacho
+    r = client.post("/api/viajes/viaje-1/despachar", json={"humano": "coordinador-trafico"})
     assert r.status_code == 200 and r.json()["viaje"]["estado"] == "en_ruta" and r.json()["timbre"]["uuid"].startswith("TEST-")
-    assert client.post("/api/viajes/viaje-1/despachar").status_code == 409
+    assert client.post("/api/viajes/viaje-1/despachar", json={"humano": "x"}).status_code == 409
+    ledger = client.get("/api/viajes/viaje-1").json()["ledger"]
+    assert ledger[-2]["tipo_evento"] == "carta_porte_timbrada_mock" and ledger[-2]["actor"] == "coordinador-trafico"
     assert client.get("/api/ledger/verify").json()["integro"] is True
+
+
+def test_rechazar_repropone_y_put_documento_de_operador(client):
+    client.post("/api/viajes/viaje-1/procesar")
+    accion_id = client.get("/api/acciones").json()[0]["accion_id"]
+    r = client.post(f"/api/acciones/{accion_id}/rechazar", json={"humano": "coordinador-trafico"})
+    assert r.status_code == 200 and r.json()["accion"]["estado"] == "rechazada" and r.json()["viaje"]["estado"] == "bloqueado"
+    cola = client.get("/api/acciones").json()
+    assert [a["accion_id"] for a in cola] == [f"{accion_id}-2"]
+    assert client.post("/api/viajes/viaje-1/procesar").status_code == 409  # sigue esperando aprobación
+
+    lic = client.get("/api/viajes/viaje-1").json()["operador"]["licencia_federal"]
+    assert client.put("/api/documentos/doc-lic-0001", json=lic | {"hash_documento": "c" * 64}).status_code == 200
+    assert client.get("/api/viajes/viaje-1").json()["operador"]["licencia_federal"]["hash_documento"] == "c" * 64
+    r = client.put("/api/documentos/doc-lic-0001", json=lic | {"tipo": "visa_fast"})
+    assert r.status_code == 422 and "licencia_federal" in r.json()["detail"]
+    assert client.get("/api/acciones?tenant_id=otro").json() == []
 
 
 def test_404_y_validacion(client):

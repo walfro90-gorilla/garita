@@ -11,6 +11,7 @@ import uuid
 from lxml import etree
 
 from dominio.modelos import Activo, Operador, Transportista, Viaje
+from tools.xsd_validate import xsd_validate
 
 NS = "http://www.sat.gob.mx/CartaPorte31"
 NSMAP = {"cartaporte31": NS}
@@ -59,8 +60,15 @@ def construir_carta_porte(viaje: Viaje, tractor: Activo, cajas: list[Activo], op
         for i, m in enumerate(viaje.mercancias):
             if not m.fraccion_arancelaria:
                 faltantes.append(f"mercancía {i + 1}: internacional sin fracción arancelaria")
+            if not m.tipo_materia:
+                faltantes.append(f"mercancía {i + 1}: internacional sin tipo_materia (c_TipoMateria)")
         if not viaje.regimenes_aduaneros:
             faltantes.append("internacional sin regímenes aduaneros")
+        if viaje.entrada_salida_merc == "Entrada":
+            # ponytail: importación exige DocumentacionAduanera (pedimento); el demo es exportación. Se implementa cuando haya un caso.
+            faltantes.append("importación: DocumentacionAduanera (pedimento) no implementada")
+    if not operador.rfc:
+        faltantes.append(f"operador {operador.operador_id}: sin RFC (RFCFigura)")
     if faltantes:
         raise CartaPorteIncompleta(faltantes)
 
@@ -85,6 +93,15 @@ def construir_carta_porte(viaje: Viaje, tractor: Activo, cajas: list[Activo], op
                               FechaHoraSalidaLlegada=u.fecha_hora_salida_llegada.strftime("%Y-%m-%dT%H:%M:%S"))
         if u.distancia_recorrida is not None:
             el.set("DistanciaRecorrida", _num(u.distancia_recorrida, 2))
+        if u.num_reg_id_trib:
+            el.set("NumRegIdTrib", u.num_reg_id_trib)
+            el.set("ResidenciaFiscal", u.residencia_fiscal)
+        d = u.domicilio
+        dom = etree.SubElement(el, f"{{{NS}}}Domicilio", Calle=d.calle, Estado=d.estado, Pais=d.pais, CodigoPostal=d.codigo_postal)
+        if d.municipio:
+            dom.set("Municipio", d.municipio)
+        if d.colonia:
+            dom.set("Colonia", d.colonia)
 
     mercs = etree.SubElement(raiz, f"{{{NS}}}Mercancias", PesoBrutoTotal=_num(sum(m.peso_en_kg for m in viaje.mercancias), 3),
                              UnidadPeso="KGM", NumTotalMercancias=str(len(viaje.mercancias)))
@@ -94,6 +111,8 @@ def construir_carta_porte(viaje: Viaje, tractor: Activo, cajas: list[Activo], op
                               PesoEnKg=_num(m.peso_en_kg, 3))
         if m.fraccion_arancelaria:
             el.set("FraccionArancelaria", m.fraccion_arancelaria)
+        if m.tipo_materia:
+            el.set("TipoMateria", m.tipo_materia)
         if m.valor_mercancia is not None and m.moneda:
             el.set("ValorMercancia", _num(m.valor_mercancia, 2))
             el.set("Moneda", m.moneda)
@@ -111,6 +130,10 @@ def construir_carta_porte(viaje: Viaje, tractor: Activo, cajas: list[Activo], op
             etree.SubElement(rems, f"{{{NS}}}Remolque", SubTipoRem=caja.sub_tipo_rem, Placa=caja.placa)
 
     fig = etree.SubElement(raiz, f"{{{NS}}}FiguraTransporte")
-    etree.SubElement(fig, f"{{{NS}}}TiposFigura", TipoFigura="01", NumLicencia=operador.licencia_federal.folio,
-                     NombreFigura=operador.nombre)
-    return etree.tostring(raiz, xml_declaration=True, encoding="UTF-8", pretty_print=True)
+    etree.SubElement(fig, f"{{{NS}}}TiposFigura", TipoFigura="01", RFCFigura=operador.rfc,
+                     NumLicencia=operador.licencia_federal.folio, NombreFigura=operador.nombre)
+    xml = etree.tostring(raiz, xml_declaration=True, encoding="UTF-8", pretty_print=True)
+    errores = xsd_validate(xml)  # facetas del XSD (longitudes, patrones, catálogos): nunca se emite XML inválido
+    if errores:
+        raise CartaPorteIncompleta([f"XSD: {e}" for e in errores])
+    return xml

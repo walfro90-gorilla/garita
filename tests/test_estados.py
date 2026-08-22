@@ -12,6 +12,7 @@ from dominio.estados import TransicionInvalida, transitar
 from dominio.modelos import AccionPropuesta, Viaje
 from infra.ledger import FirmadorLocalHmac, LedgerService
 from infra.repository import InMemoryRepository
+from tools.xsd_validate import xsd_validate
 
 XML = (Path(__file__).resolve().parents[1] / "fixtures" / "carta_porte_31_sintetica.xml").read_bytes()
 
@@ -52,9 +53,11 @@ def test_viaje_recorre_todos_los_estados(ctx):
     v = transitar(v, E.listo, **ctx)
     with pytest.raises(TransicionInvalida, match="exige el payload"):
         transitar(v, E.en_ruta, **ctx)
+    with pytest.raises(TransicionInvalida, match="exige el payload"):
+        transitar(v, E.en_ruta, carta_porte_xml=XML, **ctx)  # sin validador inyectado no hay guarda: no pasa
     with pytest.raises(TransicionInvalida, match="XSD"):
-        transitar(v, E.en_ruta, carta_porte_xml=XML.replace(b'Version="3.1"', b'Version="3.0"'), **ctx)
-    v = transitar(v, E.en_ruta, carta_porte_xml=XML, **ctx)
+        transitar(v, E.en_ruta, carta_porte_xml=XML.replace(b'Version="3.1"', b'Version="3.0"'), xsd_validate=xsd_validate, **ctx)
+    v = transitar(v, E.en_ruta, carta_porte_xml=XML, xsd_validate=xsd_validate, **ctx)
     v = transitar(v, E.cerrado, **ctx)
 
     with pytest.raises(TransicionInvalida):

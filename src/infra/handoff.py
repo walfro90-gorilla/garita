@@ -37,17 +37,22 @@ def ejecutar_handoff(
     intentos = 0
     while intentos < max_intentos:
         intentos += 1
-        crudo = llamar(error_previo)
         try:
+            crudo = llamar(error_previo)
             return validar(crudo), HandoffResult(agente=agente, paso_id=paso_id, estado=EstadoHandoff.ok, intentos=intentos)
-        except (ValidationError, ValueError, TypeError) as e:
+        except ValidationError as e:
             error_previo = str(e)
             log.warning("handoff inválido agente=%s paso=%s intento=%d", agente, paso_id, intentos)
+        except Exception as e:  # la tool reventó: también es un intento fallido, y queda registrado
+            error_previo = f"{type(e).__name__}: {e}"
+            log.warning("handoff con excepción agente=%s paso=%s intento=%d error=%s", agente, paso_id, intentos, error_previo)
 
     resultado = HandoffResult(agente=agente, paso_id=paso_id, estado=EstadoHandoff.dead_letter,
                               intentos=intentos, error_validacion=error_previo)
+    mensaje = resultado.model_dump(mode="json") | {"tenant_id": tenant_id, "viaje_id": viaje_id}
+    clave = f"dl:{paso_id}:{ledger.ultimo_hash(viaje_id)}"
     ledger.append(tenant_id=tenant_id, viaje_id=viaje_id, tipo_evento="dead_letter", actor=agente,
-                  payload=resultado.model_dump(mode="json"))
+                  payload=mensaje, idempotency_key=clave)
     if publisher is not None:
-        publisher.publicar("garita-dead-letter", resultado.model_dump(mode="json"), idempotency_key=f"dl:{paso_id}:{intentos}")
+        publisher.publicar("garita-dead-letter", mensaje, idempotency_key=clave)
     return None, resultado

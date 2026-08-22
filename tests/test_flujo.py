@@ -12,7 +12,7 @@ from conftest import TENANT
 from dominio.sintetico import sembrar_expediente as expediente
 from dominio.acciones import aprobar, cola_de_aprobacion
 from dominio.enums import EstadoAccion, EstadoViaje as E, MotivoBloqueo, TipoAccion
-from dominio.modelos import Viaje
+from dominio.modelos import AccionPropuesta, Viaje
 from infra.ledger import FirmadorLocalHmac, LedgerService
 from infra.pubsub import DeadLetter, InMemoryPublisher, handler_dead_letter
 from infra.repository import InMemoryRepository
@@ -54,20 +54,35 @@ def test_el_bloqueo_es_el_producto(s):
     assert s.ledger.verify()
 
 
-def test_reejecutar_no_duplica(s):
+def test_reentrega_tras_completar_no_duplica(s):
+    """Pub/Sub reentrega 'procesar' después de un run completo: la guarda de estado lo rechaza sin tocar nada."""
     procesar_viaje("viaje-1", s)
-    n_ledger, n_acciones = len(s.ledger.entradas), len(s.repo.listar("acciones", type(cola_de_aprobacion(s.repo, TENANT)[0])))
-    v = s.repo.obtener("viajes", "viaje-1", Viaje)
-    # Reejecución del mismo paso sobre el mismo estado de entrada (p. ej. reentrega de Pub/Sub).
+    n_ledger, n_acc = len(s.ledger.entradas), len(s.repo.listar("acciones", AccionPropuesta))
+    with pytest.raises(ValueError, match="solo se procesa en validando"):
+        procesar_viaje("viaje-1", s)
+    assert (len(s.ledger.entradas), len(s.repo.listar("acciones", AccionPropuesta))) == (n_ledger, n_acc)
+
+
+def test_reintento_tras_caida_parcial_no_duplica(s):
+    """Cae el proceso tras escribir la decisión al ledger y antes de persistir el viaje: el reintento
+    produce exactamente una decisión y una acción (clave por versión del expediente)."""
     from agentes.coordinador.flujo import decidir, fusionar, paso_cumplimiento, paso_seguimiento, paso_validador
 
-    v_val = v.model_copy(update={"estado": E.validando})
-    bloqueos = paso_seguimiento(v_val, fusionar(v_val, paso_validador(v_val, s)[0] + paso_cumplimiento(v_val, s)[0]), s)
-    decidir(v_val, bloqueos, s)
-    assert len(cola_de_aprobacion(s.repo, TENANT)) == 1
-    assert len(s.repo.listar("acciones", type(cola_de_aprobacion(s.repo, TENANT)[0]))) == n_acciones
-    assert sum(1 for e in s.ledger.entradas if e.tipo_evento == "decision_coordinador") == 1  # misma clave: no se duplica
-    assert len(s.ledger.entradas) == n_ledger + 1  # solo la transición (bloqueado→bloqueado no existe: ver abajo)
+    class RepoCae(InMemoryRepository):
+        def guardar(self, coleccion, doc_id, modelo):
+            if coleccion == "viajes" and getattr(modelo, "estado", None) == E.bloqueado and not getattr(self, "ya", False):
+                self.ya = True
+                raise RuntimeError("Firestore caído a medio commit")
+            super().guardar(coleccion, doc_id, modelo)
+
+    s.repo = RepoCae(); expediente(s.repo); s.registro = registro_por_defecto(s.repo)
+    s.ledger = LedgerService(FirmadorLocalHmac(secrets.token_bytes(32)), repo=s.repo)
+    with pytest.raises(RuntimeError):
+        procesar_viaje("viaje-1", s)
+    assert procesar_viaje("viaje-1", s).estado == E.bloqueado  # el viaje quedó en validando: se reintenta
+    assert [e.tipo_evento for e in s.ledger.entradas].count("decision_coordinador") == 1
+    assert [e.tipo_evento for e in s.ledger.entradas].count("transicion_viaje") == 2  # borrador→validando, validando→bloqueado
+    assert len(s.repo.listar("acciones", AccionPropuesta)) == 1 and s.ledger.verify()
 
 
 def test_aprobar_sin_evidencia_nueva_sigue_bloqueado_y_con_evidencia_sale(s):
@@ -128,8 +143,11 @@ def test_despachar_timbra_con_mock_y_sale(s):
 
     expediente(s.repo, verificacion_vencida=False)
     assert procesar_viaje("viaje-1", s).estado == E.listo
-    v, timbre = despachar("viaje-1", s)
+    with pytest.raises(ValueError, match="humano"):
+        despachar("viaje-1", s, humano="")
+    v, timbre = despachar("viaje-1", s, humano="coordinador-trafico")
     assert v.estado == E.en_ruta and timbre.uuid.startswith("TEST-") and timbre.pac.startswith("PAC-MOCK")
+    assert s.ledger.entradas[-2].actor == "coordinador-trafico" and s.ledger.entradas[-2].payload["autorizado_por"] == "coordinador-trafico"
     cp = s.repo.obtener("cartas_porte", "viaje-1", CartaPorteTimbrada)
     assert cp.id_ccp.startswith("CCC") and cp.hash_xml == timbre.hash_xml and "TEST001" in cp.xml
     assert [e.tipo_evento for e in s.ledger.entradas][-2:] == ["carta_porte_timbrada_mock", "transicion_viaje"]
@@ -141,4 +159,31 @@ def test_despachar_bloqueado_no_sale(s):
 
     procesar_viaje("viaje-1", s)
     with pytest.raises(ValueError, match="no está en listo"):
-        despachar("viaje-1", s)
+        despachar("viaje-1", s, humano="x")
+
+
+def test_rechazar_no_deja_al_viaje_sin_salida(s):
+    from agentes.coordinador.flujo import reproponer_tras_rechazo
+    from dominio.acciones import rechazar
+
+    procesar_viaje("viaje-1", s)
+    primera = cola_de_aprobacion(s.repo, TENANT)[0]
+    rechazar(primera, "coordinador-trafico", ledger=s.ledger, repo=s.repo)
+    assert cola_de_aprobacion(s.repo, TENANT) == []
+    v = reproponer_tras_rechazo("viaje-1", s)
+    nueva = cola_de_aprobacion(s.repo, TENANT)
+    assert len(nueva) == 1 and nueva[0].accion_id == f"{primera.accion_id}-2"
+    assert v.bloqueos_duros_abiertos()[0].accion_propuesta_id == nueva[0].accion_id
+    assert reproponer_tras_rechazo("viaje-1", s).bloqueos_duros_abiertos()[0].accion_propuesta_id == nueva[0].accion_id  # idempotente
+
+
+def test_tool_que_revienta_va_a_dead_letter(s):
+    def vigencias_rotas(**kwargs):
+        raise KeyError("activo sin documentos")
+
+    s.registro.registrar("vigencias_query", vigencias_rotas)
+    v = procesar_viaje("viaje-1", s)
+    assert [b.motivo for b in v.bloqueos_duros_abiertos()] == [MotivoBloqueo.verificacion_fallida]
+    dl = [e for e in s.ledger.entradas if e.tipo_evento == "dead_letter"]
+    assert len(dl) == 1 and "KeyError" in dl[0].payload["error_validacion"] and dl[0].payload["viaje_id"] == "viaje-1"
+    assert s.repo.obtener("dead_letters", "dl-cumplimiento:viaje-1", DeadLetter) is not None

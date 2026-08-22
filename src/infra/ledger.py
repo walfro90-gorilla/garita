@@ -8,6 +8,7 @@ y tests; Cloud KMS (MAC HMAC-SHA256) en producción, misma semántica.
 import hashlib
 import hmac
 import json
+import threading
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -79,10 +80,16 @@ def _hash(entrada: EntradaLedger) -> str:
 
 
 class LedgerService:
+    """Con `repo`, la cadena se rehidrata al arrancar (Cloud Run escala a cero): la
+    secuencia, el enlace y la idempotencia sobreviven al proceso. Append serializado."""
+
     def __init__(self, firmador: Firmador, repo: Any | None = None) -> None:
         self._firmador = firmador
         self._repo = repo  # opcional: persiste cada entrada en la colección "ledger"
+        self._lock = threading.Lock()
         self._entradas: list[EntradaLedger] = []
+        if repo is not None:
+            self._entradas = sorted(repo.listar("ledger", EntradaLedger), key=lambda e: e.secuencia)
 
     @property
     def entradas(self) -> tuple[EntradaLedger, ...]:
@@ -98,6 +105,10 @@ class LedgerService:
         payload: dict[str, Any],
         idempotency_key: str | None = None,
     ) -> EntradaLedger:
+        with self._lock:
+            return self._append(tenant_id, viaje_id, tipo_evento, actor, payload, idempotency_key)
+
+    def _append(self, tenant_id, viaje_id, tipo_evento, actor, payload, idempotency_key) -> EntradaLedger:
         if idempotency_key is not None:
             for e in self._entradas:
                 if e.idempotency_key == idempotency_key:
@@ -122,8 +133,15 @@ class LedgerService:
         entrada = borrador.model_copy(update={"hash": digesto, "firma": firma})
         self._entradas.append(entrada)
         if self._repo is not None:
-            self._repo.guardar("ledger", f"{tenant_id}:{entrada.secuencia}", entrada)
+            self._repo.guardar("ledger", f"{entrada.secuencia:012d}", entrada)
         return entrada
+
+    def ultimo_hash(self, viaje_id: str) -> str:
+        """Hash de la última entrada de este viaje: la 'versión' del expediente para claves de idempotencia."""
+        for e in reversed(self._entradas):
+            if e.viaje_id == viaje_id:
+                return e.hash
+        return HASH_GENESIS
 
     def verify(self) -> bool:
         """Recalcula la cadena completa. Lanza LedgerAlterado en la primera entrada
