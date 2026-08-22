@@ -43,12 +43,28 @@ class ToolRegistry:
         return self._tools[nombre]
 
 
-def registro_por_defecto() -> ToolRegistry:
-    """Solo las tools deterministas de F1. Las demás se registran en F2/F3."""
+def registro_por_defecto(repo=None) -> ToolRegistry:
+    """Tools deterministas (F1–F3). Las que tocan el expediente se ligan a `repo`.
+    Las de LLM/GEAP (gemma_redact, gemini_extract, memory_bank, ctpat_msc_lookup, delegar…)
+    se registran donde se construye la flota."""
+    from functools import partial
+
     from tools.catalogo_lookup import catalogo_lookup
+    from tools.cross_check import cross_check
     from tools.xsd_validate import xsd_validate
 
     registro = ToolRegistry()
     registro.registrar("xsd_validate", xsd_validate)
     registro.registrar("catalogo_lookup", catalogo_lookup)
+    registro.registrar("cross_check", cross_check)
+    if repo is not None:
+        from tools.firestore_write import firestore_write
+        from tools.proponer_accion import proponer_accion
+        from tools.storage_read import storage_read
+        from tools.vigencias_query import vigencias_query
+
+        registro.registrar("storage_read", storage_read)
+        registro.registrar("firestore_write", partial(firestore_write, repo))
+        registro.registrar("vigencias_query", partial(vigencias_query, repo))
+        registro.registrar("proponer_accion", partial(proponer_accion, repo))
     return registro
