@@ -1,0 +1,5 @@
+# Solo desarrollo: generación del corpus sintético (scripts/generar_corpus.py).
+# No se instala en Cloud Run. Autorizado el 22 ago 2026 (docs/PROGRESS.md, pregunta 4).
+-r requirements.txt
+Pillow==12.3.0
+reportlab==5.0.1
