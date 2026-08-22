@@ -1,0 +1,11 @@
+# Versiones fijadas tras el primer `pip install` real (22 ago 2026, Python 3.12.3).
+# Dependencias transitivas (fastapi, uvicorn, httpx) las trae google-adk; no se listan.
+google-adk==2.7.1
+google-genai==2.19.0
+google-cloud-firestore==2.28.1
+google-cloud-pubsub==2.39.1
+google-cloud-kms==3.16.0
+google-cloud-storage==3.13.1
+pydantic==2.13.4
+lxml==6.1.2
+pytest==9.1.1
