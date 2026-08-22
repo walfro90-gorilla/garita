@@ -16,6 +16,8 @@ class Repository(Protocol):
 
     def obtener(self, coleccion: str, doc_id: str, tipo: type[M]) -> M | None: ...
 
+    def listar(self, coleccion: str, tipo: type[M], **igual: Any) -> list[M]: ...
+
 
 class InMemoryRepository:
     def __init__(self) -> None:
@@ -27,6 +29,13 @@ class InMemoryRepository:
     def obtener(self, coleccion: str, doc_id: str, tipo: type[M]) -> M | None:
         datos = self._docs.get((coleccion, doc_id))
         return None if datos is None else tipo.model_validate(datos)
+
+    def listar(self, coleccion: str, tipo: type[M], **igual: Any) -> list[M]:
+        return [
+            tipo.model_validate(d)
+            for (c, _), d in self._docs.items()
+            if c == coleccion and all(d.get(k) == v for k, v in igual.items())
+        ]
 
 
 class FirestoreRepository:
@@ -46,3 +55,11 @@ class FirestoreRepository:
     def obtener(self, coleccion: str, doc_id: str, tipo: type[M]) -> M | None:
         snap = self._client.collection(coleccion).document(doc_id).get()
         return tipo.model_validate(snap.to_dict()) if snap.exists else None
+
+    def listar(self, coleccion: str, tipo: type[M], **igual: Any) -> list[M]:
+        from google.cloud.firestore_v1 import FieldFilter
+
+        q = self._client.collection(coleccion)
+        for k, v in igual.items():
+            q = q.where(filter=FieldFilter(k, "==", v))
+        return [tipo.model_validate(d.to_dict()) for d in q.stream()]

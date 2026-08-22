@@ -89,8 +89,19 @@ class LedgerService:
         return tuple(self._entradas)
 
     def append(
-        self, *, tenant_id: str, viaje_id: str, tipo_evento: str, actor: str, payload: dict[str, Any]
+        self,
+        *,
+        tenant_id: str,
+        viaje_id: str,
+        tipo_evento: str,
+        actor: str,
+        payload: dict[str, Any],
+        idempotency_key: str | None = None,
     ) -> EntradaLedger:
+        if idempotency_key is not None:
+            for e in self._entradas:
+                if e.idempotency_key == idempotency_key:
+                    return e  # mismo paso, misma entrada: no se duplica
         anterior = self._entradas[-1].hash if self._entradas else HASH_GENESIS
         borrador = EntradaLedger(
             secuencia=len(self._entradas),
@@ -104,6 +115,7 @@ class LedgerService:
             hash="",
             firma="",
             firmado_por=self._firmador.key_id,
+            idempotency_key=idempotency_key,
         )
         digesto = _hash(borrador)
         firma = self._firmador.firmar(bytes.fromhex(digesto)).hex()
