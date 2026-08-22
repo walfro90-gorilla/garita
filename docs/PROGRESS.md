@@ -7,7 +7,7 @@
 
 ## Estado actual
 
-**Fase:** F2 · Ingesta multimodal — parte local completa (suite 64 verde); Gemma en Cloud Run y Gemini real esperan facturación. F0 sigue con 3 criterios bloqueados por facturación.
+**Fase:** F3 · Flota multi-agente — parte local completa (suite 76 verde). Gemini/Gemma/Pub/Sub reales esperan facturación. F0 sigue con 3 criterios bloqueados por facturación.
 **Fecha:** 22 ago 2026
 **Días restantes hasta el envío (dom 30 ago):** 8
 
@@ -53,7 +53,19 @@
 - [x] **Latencia medida:** visión en CPU = **231 s** de prompt-eval para una imagen (359 tokens) + 12 s de generación; segunda llamada con la misma imagen 0.3 s (caché). Medición bajo presión de memoria; **re-medir en Cloud Run 8 vCPU / 16 GiB** antes de decidir. Si sigue en minutos: el bloque en vivo del video muestra la ingesta ya corrida (logs + Firestore) y la grabación continua empieza en `cumplimiento`; o plan B de ADR-009 con ADR nuevo.
 - [ ] Servicio Gemma en Cloud Run `northamerica-south1` — requiere facturación (contenedor Ollama + `gemma3:4b`, CPU).
 - [ ] `gemini_extract` contra Vertex AI real — requiere facturación. Código listo, sin probar.
-- [ ] Extracción de texto de PDF (póliza de 12 páginas) para Gemma — F3; hoy el PDF se cubre con la transcripción del manifiesto.
+- [ ] Extracción de texto de PDF (póliza de 12 páginas) para Gemma — hoy el PDF se cubre con la transcripción del manifiesto.
+
+### F3 — parte local completa (22 ago, adelantada)
+- [x] Tools: `cross_check` (validador: expediente + catálogos), `vigencias_query` (cumplimiento: documentos → `Bloqueo` duro/blando), `proponer_accion` (seguimiento: `AccionPropuesta` idempotente). `registro_por_defecto(repo)` liga las que tocan el expediente.
+- [x] Coordinador: `agentes/coordinador/flujo.py` (pasos puros + `procesar_viaje` + `reanudar_tras_aprobacion`) y `agentes/flota.py` (ADK: `Coordinador` → `SequentialAgent(ParallelAgent(validador, cumplimiento), seguimiento)`, corre con `InMemoryRunner`, sin LLM).
+- [x] Tolerancia a fallas: `infra/handoff.ejecutar_handoff` (Pydantic, reintento con error inyectado, dead-letter) compartido por ingesta y coordinador · `infra/idempotencia` + `LedgerService.append(idempotency_key)` · `infra/pubsub` (`Publisher`, `InMemoryPublisher`, `PubSubPublisher` sin probar, `handler_dead_letter` escribe `dead_letters` + ledger) · `max_turns`: pendiente, aplica a `LlmAgent`.
+- [x] Cola de aprobación: `dominio/acciones.py` (`aprobar`, `rechazar`, `cola_de_aprobacion`), colección `acciones`. `Repository.listar`.
+- [x] **ADR-010:** agentes deterministas; dead-letter ⇒ `verificacion_fallida`; la detección nueva manda (aprobar no libera, la evidencia sí); ids deterministas.
+- [x] **AC:** caso E2E (`tests/test_flujo.py`): expediente con verificación vencida → viaje `bloqueado` con motivo, evidencia (`…vencida.jpg`) y `renovar_documento` en cola `pendiente_aprobacion` · caos: `vigencias_query` devuelve basura → 3 `handoff inválido` en logs → dead-letter en expediente → bloqueo `verificacion_fallida` + acción `notificar` · reejecutar no duplica (acciones ni decisión en ledger) · toda decisión en el ledger (`decision_coordinador` + transiciones), `verify()` OK · flota ADK produce lo mismo (`tests/test_flota_adk.py`).
+- [ ] `ingesta` y `coordinador` como `LlmAgent` (Gemini) — facturación.
+- [ ] Pub/Sub real con dead-letter topic en `northamerica-south1` — facturación.
+- [ ] Constructor del XML de Carta Porte 3.1 desde `Viaje` (necesario para `listo → en_ruta` en el demo) + mock de PAC con contrato.
+- [ ] `ctpat_msc_lookup` y `memory_bank` — F4 (GEAP).
 
 ---
 
@@ -70,6 +82,7 @@
 | 007 | Tenant-shaped desde el primer commit | Aceptado |
 | 008 | Firma del ledger detrás de `Firmador`: HMAC local en tests, Cloud KMS MAC en producción | **Aceptado — 22 ago** |
 | 009 | Gemini solo recibe texto redactado; Gemma transcribe y redacta en México; compuerta `afirmar_sin_pii` | **Aceptado — 22 ago** |
+| 010 | Flota ADK determinista; dead-letter bloquea; la evidencia libera, la aprobación no; ids deterministas | **Aceptado — 22 ago** |
 
 Hallazgos colaterales de ADR-003 que afectan fases posteriores:
 - No existe Gemini 3.5 **Pro**. Modelos 3.x GA en Vertex: `gemini-3.5-flash` (05/2026), `gemini-3.5-flash-lite` y `gemini-3.6-flash` (07/2026), `gemini-3.7-flash` (13 ago 2026). Solo 3.5 Flash tiene endpoints regionales; el resto solo `global`/`us`/`eu`. El "Pro solo para razonamiento final" del SPEC §riesgos no aplica: usar 3.7 Flash si se quiere más razonamiento.
@@ -126,15 +139,12 @@ Hallazgos colaterales de ADR-003 que afectan fases posteriores:
 
 ## Siguiente acción concreta
 
-**F3 · Flota multi-agente (D4–D5).** Lo que no necesita GCP, en este orden:
-1. Envoltorio ADK de `ingesta` (`LlmAgent` con las 4 tools del scope vía `ToolRegistry`) y de `validador` (`xsd_validate`, `catalogo_lookup`, `cross_check` — esta última: cruzar `Viaje` vs `Activo`/`Operador`/`DocumentoVigencia` y producir `Bloqueo`s; es determinista, tests primero).
-2. `cumplimiento`: `vigencias_query` sobre el repositorio (por activo y operador) → lista de `Bloqueo` con severidad (vencido = duro, por_vencer = blando). Determinista.
-3. `seguimiento`: `proponer_accion` → `AccionPropuesta` en `pending_approval`; cola de aprobación = colección `acciones` filtrada por estado.
-4. `coordinador`: orquesta secuencial ingesta → (validador ‖ cumplimiento) → seguimiento, y aplica `transitar()`. **El bloqueo** del viaje con motivo, evidencia y acción propuesta es el producto.
-5. Idempotencia: `idempotency_key = sha256(viaje_id + paso_id + hash(input))` en `firestore_write` y `proponer_accion`; test de que reejecutar no duplica.
-6. Pub/Sub + dead-letter real: requiere facturación; dejar el handler escrito contra una interfaz `Publisher` con implementación en memoria.
+**Sin facturación, en este orden:**
+1. **Constructor de Carta Porte 3.1** `src/tools/carta_porte.py`: `Viaje` + expediente → XML del complemento, validado con `xsd_validate` (el fixture `fixtures/carta_porte_31_sintetica.xml` es la forma objetivo). Luego `listo → en_ruta` en el E2E y un **mock de PAC** (`src/infra/pac_mock.py`: recibe XML, devuelve UUID `TEST-…`, nunca timbra de verdad; se declara en el video).
+2. **API FastAPI** `src/api/main.py` (F5 adelantada, corre local): `POST /viajes/{id}/procesar` (flota ADK), `GET /acciones?estado=pendiente_aprobacion`, `POST /acciones/{id}/aprobar`, `GET /viajes/{id}` (expediente + ledger). Montar el servidor ADK (`get_fast_api_app`) en la misma app.
+3. **F3.5 ensayo de video** con lo local: grabar 4 min feos corriendo `pytest -k caos` y el E2E desde la API; anotar lo que no se puede mostrar.
 
-**Con facturación (en cuanto exista):** `scripts/deploy_hello.sh`; luego Gemma en Cloud Run MX (`ollama/ollama` + `gemma3:4b`, CPU 8 vCPU / 16 GiB, `min-instances=0`) y `scripts/probar_gemma_local.py <url.run.app>` contra ese servicio; luego `gemini_extract` real con un documento del corpus.
+**Con facturación:** `scripts/deploy_hello.sh` → Gemma en Cloud Run MX → `ingesta` y `coordinador` como `LlmAgent` con `max_turns` → Pub/Sub + dead-letter topic → F4 (Memory Bank, Model Armor).
 
 **F0 pendiente — si la facturación ya está activa:** ejecutar en este orden y pegar el resultado aquí:
 ```bash
@@ -153,6 +163,11 @@ Luego marcar los tres criterios de F0 restantes, commitear la captura como `F0: 
 ### 22 ago — sesión 1
 - Repo inicializado. Estructura de archivos creada.
 - `CLAUDE.md`, `docs/SPEC.md` y `docs/PROGRESS.md` en su lugar.
+
+### 22 ago — sesión 5 (F3)
+- Tools de validador/cumplimiento/seguimiento, flujo del coordinador, flota ADK (`InMemoryRunner`, sin LLM). 76 tests en 2.1 s.
+- Handoff genérico compartido con ingesta; idempotencia en ledger; Pub/Sub en memoria + handler de dead-letter; cola de aprobación.
+- ADK 2.7.1 deprecó `SequentialAgent`/`ParallelAgent` a favor de `Workflow`, pero `Workflow` no puede ir bajo un `LlmAgent`: se mantienen (ADR-010).
 
 ### 22 ago — sesión 4 (F2)
 - Corpus sintético generado y verificado visualmente (licencia: vigencia emborronada, foto inclinada).
