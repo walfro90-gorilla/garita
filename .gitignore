@@ -11,3 +11,6 @@ build/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Sesiones locales de ADK (adk web / adk api_server)
+.adk/
